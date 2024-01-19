@@ -90,6 +90,24 @@ nlohmann::json parseJSONConfig(const std::string& configFile)
     return data;
 }
 
+void restartSystemdUnit(const std::string& unit)
+ {
+     sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+ 
+     try
+     {
+         auto method = bus.new_method_call(systemBusName, systemPath,
+                                           systemIntf, "RestartUnit");
+         method.append(unit.c_str(), "replace");
+         bus.call_noreply(method);
+     }
+     catch (const sdbusplus::exception::SdBusError& ex)
+     {
+         log<level::ERR>("Failed to restart nslcd service",
+                         entry("ERR=%s", ex.what()));
+         elog<InternalFailure>();
+     }
+ }
 
 bool isDCMIPowerMgmtSupported()
 {
@@ -890,6 +908,7 @@ ipmi::RspType<> setDCMIConfParams(ipmi::Context::ptr& ctx, uint8_t parameter,
                 // but as per n/w manager design, each time when we
                 // update n/w parameters, n/w service is restarted. So
                 // we no need to take any action in this case.
+                dcmi::restartSystemdUnit(dcmi::networkdService);
             }
             break;
         }
