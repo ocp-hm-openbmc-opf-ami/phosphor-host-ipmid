@@ -42,6 +42,7 @@ static constexpr auto gDCMIPowerMgmtSupported = 0x1;
 static constexpr auto gMaxSELEntriesMask = 0xFFF;
 static constexpr auto gByteBitSize = 8;
 
+
 /** @brief Check whether DCMI power management is supported
  *         in the DCMI Capabilities config file.
  *
@@ -50,3 +51,4 @@ static constexpr auto gByteBitSize = 8;
 bool isDCMIPowerMgmtSupported();
 
 } // namespace dcmi
+

@@ -90,6 +90,7 @@ nlohmann::json parseJSONConfig(const std::string& configFile)
     return data;
 }
 
+
 bool isDCMIPowerMgmtSupported()
 {
     static bool parsed = false;
@@ -771,6 +772,11 @@ std::tuple<std::vector<std::tuple<uint7_t, bool, uint8_t>>, uint8_t>
     auto data = parseJSONConfig(gDCMISensorsConfig);
     static const std::vector<nlohmann::json> empty{};
     std::vector<nlohmann::json> readings = data.value(type, empty);
+
+    if (instance == 0)
+    {
+        instance = instance + 1;
+    }
     for (const auto& j : readings)
     {
         // Max of 8 response data sets
