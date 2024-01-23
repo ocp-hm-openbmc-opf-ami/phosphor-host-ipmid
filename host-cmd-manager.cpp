@@ -24,6 +24,8 @@ namespace command
 constexpr auto HOST_STATE_PATH = "/xyz/openbmc_project/state/host0";
 constexpr auto HOST_STATE_INTERFACE = "xyz.openbmc_project.State.Host";
 constexpr auto HOST_TRANS_PROP = "RequestedHostTransition";
+constexpr const char* IPMI_PATH = "/xyz/openbmc_project/Ipmi/Channel/ipmi_kcs3";
+constexpr const char* IPMI_INTERFACE = "xyz.openbmc_project.Ipmi.Channel.SMS";
 
 // For throwing exceptions
 using namespace phosphor::logging;
@@ -104,6 +106,20 @@ void Manager::clearQueue()
         // `false` indicating Failure
         std::get<CallBack>(command)(ipmiCmdData, false);
     }
+
+    auto host = ::ipmi::getService(this->bus, IPMI_INTERFACE, IPMI_PATH);
+    auto method = this->bus.new_method_call(host.c_str(), IPMI_PATH,
+                                            IPMI_INTERFACE, "clearAttention");
+
+    try
+    {
+        auto reply = this->bus.call(method);
+    }
+    catch (sdbusplus::exception_t&)
+    {
+        log<level::ERR>("Error in clearing SMS attention");
+        elog<InternalFailure>();
+    }
 }
 
 // Called for alerting the host
@@ -113,10 +129,7 @@ void Manager::checkQueueAndAlertHost()
     {
         log<level::DEBUG>("Asserting SMS Attention");
 
-        std::string HOST_IPMI_SVC("org.openbmc.HostIpmi");
-        std::string IPMI_PATH("/org/openbmc/HostIpmi/1");
-        std::string IPMI_INTERFACE("org.openbmc.HostIpmi");
-
+        auto host = ::ipmi::getService(this->bus, IPMI_INTERFACE, IPMI_PATH);
         // Start the timer for this transaction
         auto time = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::seconds(IPMI_SMS_ATN_ACK_TIMEOUT_SECS));
@@ -128,17 +141,14 @@ void Manager::checkQueueAndAlertHost()
             return;
         }
 
-        auto method =
-            this->bus.new_method_call(HOST_IPMI_SVC.c_str(), IPMI_PATH.c_str(),
-                                      IPMI_INTERFACE.c_str(), "setAttention");
-
+        auto method = this->bus.new_method_call(host.c_str(), IPMI_PATH,
+                                                IPMI_INTERFACE, "setAttention");
         try
         {
             auto reply = this->bus.call(method);
-
             log<level::DEBUG>("SMS Attention asserted");
         }
-        catch (sdbusplus::exception_t& e)
+        catch (const std::exception&)
         {
             log<level::ERR>("Error when call setAttention method");
         }
