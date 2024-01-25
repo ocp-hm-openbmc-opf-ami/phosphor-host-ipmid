@@ -207,3 +207,9 @@ void WatchdogService::setInterval(uint64_t interval)
 {
     setProperty("Interval", interval);
 }
+
+void WatchdogService::setPreTimeoutInterrupt(
+     PreTimeoutInterruptAction preTimeoutInterrupt)
+ {
+     setProperty("PreTimeoutInterrupt", convertForMessage(preTimeoutInterrupt));
+ }
