@@ -1536,9 +1536,8 @@ std::map<IpmiValue, Source::Sources> sourceIpmiToDbus = {
     {ipmiDefault, Source::Sources::Default}};
 
 std::map<IpmiValue, Mode::Modes> modeIpmiToDbus = {
-#ifdef ENABLE_BOOT_FLAG_SAFE_MODE_SUPPORT
     {0x03, Mode::Modes::Safe},
-#endif // ENABLE_BOOT_SAFE_MODE_SUPPORT
+    {0x04, Mode::Modes::Diag},
     {0x06, Mode::Modes::Setup},
     {ipmiDefault, Mode::Modes::Regular}};
 
@@ -1553,9 +1552,8 @@ std::map<Source::Sources, IpmiValue> sourceDbusToIpmi = {
     {Source::Sources::Default, ipmiDefault}};
 
 std::map<Mode::Modes, IpmiValue> modeDbusToIpmi = {
-#ifdef ENABLE_BOOT_FLAG_SAFE_MODE_SUPPORT
     {Mode::Modes::Safe, 0x03},
-#endif // ENABLE_BOOT_SAFE_MODE_SUPPORT
+    {Mode::Modes::Diag, 0x04},
     {Mode::Modes::Setup, 0x06},
     {Mode::Modes::Regular, ipmiDefault}};
 

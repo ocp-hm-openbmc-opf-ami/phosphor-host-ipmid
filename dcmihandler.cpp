@@ -90,6 +90,25 @@ nlohmann::json parseJSONConfig(const std::string& configFile)
     return data;
 }
 
+void restartSystemdUnit(const std::string& unit)
+ {
+     sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+ 
+     try
+     {
+         auto method = bus.new_method_call(systemBusName, systemPath,
+                                           systemIntf, "RestartUnit");
+         method.append(unit.c_str(), "replace");
+         bus.call_noreply(method);
+     }
+     catch (const sdbusplus::exception::SdBusError& ex)
+     {
+         log<level::ERR>("Failed to restart nslcd service",
+                         entry("ERR=%s", ex.what()));
+         elog<InternalFailure>();
+     }
+ }
+
 bool isDCMIPowerMgmtSupported()
 {
     static bool parsed = false;
@@ -771,6 +790,11 @@ std::tuple<std::vector<std::tuple<uint7_t, bool, uint8_t>>, uint8_t>
     auto data = parseJSONConfig(gDCMISensorsConfig);
     static const std::vector<nlohmann::json> empty{};
     std::vector<nlohmann::json> readings = data.value(type, empty);
+
+    if (instance == 0)
+    {
+        instance = instance + 1;
+    }
     for (const auto& j : readings)
     {
         // Max of 8 response data sets
@@ -884,6 +908,7 @@ ipmi::RspType<> setDCMIConfParams(ipmi::Context::ptr& ctx, uint8_t parameter,
                 // but as per n/w manager design, each time when we
                 // update n/w parameters, n/w service is restarted. So
                 // we no need to take any action in this case.
+                dcmi::restartSystemdUnit(dcmi::networkdService);
             }
             break;
         }
