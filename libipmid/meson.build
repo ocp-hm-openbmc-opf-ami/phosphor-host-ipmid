@@ -22,6 +22,7 @@ libipmid = library(
   'signals.cpp',
   'systemintf-sdbus.cpp',
   'utils.cpp',
+  'net_utility.cpp',
   dependencies: [ipmid_pre, entity_map_json_dep],
   version: meson.project_version(),
   include_directories: root_inc,

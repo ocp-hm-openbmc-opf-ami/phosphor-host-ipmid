@@ -11,7 +11,7 @@ namespace transport
 {
 
 using stdplus::operator""_zsv;
-
+using namespace phosphor::logging;
 // D-Bus Network Daemon definitions
 constexpr auto PATH_ROOT = "/xyz/openbmc_project/network"_zsv;
 constexpr auto INTF_ETHERNET = "xyz.openbmc_project.Network.EthernetInterface";
@@ -23,6 +23,8 @@ constexpr auto INTF_NEIGHBOR_CREATE_STATIC =
     "xyz.openbmc_project.Network.Neighbor.CreateStatic";
 constexpr auto INTF_VLAN = "xyz.openbmc_project.Network.VLAN";
 constexpr auto INTF_VLAN_CREATE = "xyz.openbmc_project.Network.VLAN.Create";
+constexpr auto INTF_ARPCONTROL = "xyz.openbmc_project.Network.ARPControl";
+constexpr auto maxPriority = 7;
 
 /** @brief IPMI LAN Parameters */
 enum class LanParam : uint8_t
@@ -34,9 +36,12 @@ enum class LanParam : uint8_t
     IPSrc = 4,
     MAC = 5,
     SubnetMask = 6,
+    BMCARPControl = 10,
+    GARPInterval = 11,
     Gateway1 = 12,
     Gateway1MAC = 13,
     VLANId = 20,
+    VLANPriority = 21,
     CiphersuiteSupport = 22,
     CiphersuiteEntries = 23,
     cipherSuitePrivilegeLevels = 24,
@@ -60,6 +65,15 @@ enum class IPSrc : uint8_t
     DHCP = 2,
     BIOS = 3,
     BMC = 4,
+};
+
+/** @brief IPMI ARP Control Enables Flag */
+enum class ARPControlEnables : uint8_t
+{
+    BMCARPControlDisable = 0,
+    BMCGARPOnly = 1,
+    BMCARPOnly = 2,
+    BMCARPControlBoth = 3,
 };
 
 /** @brief IPMI Set Status */
@@ -110,8 +124,9 @@ enum class IPv6AddressStatus : uint8_t
 
 namespace IPv6RouterControlFlag
 {
-constexpr uint8_t Static = 0;
-constexpr uint8_t Dynamic = 1;
+constexpr uint8_t Static = 0;     //IPv6 Router Address Configuration Control Bits
+constexpr uint8_t Dynamic = 1;   //IPv6 Router Address Configuration Control Bits
+uint8_t StaticControl = 0;
 }; // namespace IPv6RouterControlFlag
 
 // LAN Handler specific response codes
@@ -122,16 +137,18 @@ constexpr Cc ccParamReadOnly = 0x82;
 // VLANs are a 12-bit value
 constexpr uint16_t VLAN_VALUE_MASK = 0x0fff;
 constexpr uint16_t VLAN_ENABLE_FLAG = 0x8000;
+constexpr uint8_t VLAN_MAX_NUM = 2;
 
 // Arbitrary v6 Address Limits to prevent too much output in ipmitool
-constexpr uint8_t MAX_IPV6_STATIC_ADDRESSES = 15;
-constexpr uint8_t MAX_IPV6_DYNAMIC_ADDRESSES = 15;
+constexpr uint8_t MAX_IPV6_STATIC_ADDRESSES = 16;
+constexpr uint8_t MAX_IPV6_DYNAMIC_ADDRESSES = 16;
 
 // Prefix length limits of phosphor-networkd
 constexpr uint8_t MIN_IPV4_PREFIX_LENGTH = 1;
 constexpr uint8_t MAX_IPV4_PREFIX_LENGTH = 32;
 constexpr uint8_t MIN_IPV6_PREFIX_LENGTH = 1;
 constexpr uint8_t MAX_IPV6_PREFIX_LENGTH = 128;
+constexpr char propertyLinkLocal[] = "LinkLocalAutoConf";
 
 /** @enum SolConfParam
  *

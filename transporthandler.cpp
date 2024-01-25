@@ -16,6 +16,7 @@ using sdbusplus::error::xyz::openbmc_project::common::InvalidArgument;
 using sdbusplus::server::xyz::openbmc_project::network::EthernetInterface;
 using sdbusplus::server::xyz::openbmc_project::network::IP;
 using sdbusplus::server::xyz::openbmc_project::network::Neighbor;
+using sdbusplus::server::xyz::openbmc_project::network::ARPControl;
 
 namespace cipher
 {
@@ -92,6 +93,8 @@ std::optional<ChannelParams> maybeGetChannelParams(sdbusplus::bus_t& bus,
     reply.read(objs);
 
     ChannelParams params;
+    params.numIntfVlan = 0;
+    params.numIntfEthernet = 0;
     for (const auto& [path, impls] : objs)
     {
         if (!ifnameInPath(ifname, path))
@@ -107,10 +110,12 @@ std::optional<ChannelParams> maybeGetChannelParams(sdbusplus::bus_t& bus,
                 if (intf == INTF_VLAN)
                 {
                     vlan = true;
+                    params.numIntfVlan += 1;
                 }
                 else if (intf == INTF_ETHERNET)
                 {
                     ethernet = true;
+                    params.numIntfEthernet += 1;
                 }
             }
             if (params.service.empty() && (vlan || ethernet))
@@ -258,16 +263,16 @@ void deleteObjectIfExists(sdbusplus::bus_t& bus, const std::string& service,
  */
 template <int family>
 void createIfAddr(sdbusplus::bus_t& bus, const ChannelParams& params,
-                  typename AddrFamily<family>::addr address, uint8_t prefix)
+                  typename AddrFamily<family>::addr address, uint8_t prefix, uint8_t index = 0)
 {
     auto newreq = bus.new_method_call(params.service.c_str(),
                                       params.logicalPath.c_str(),
-                                      INTF_IP_CREATE, "IP");
+                                      INTF_IP_CREATE, "IPWithIndex");
     std::string protocol =
         sdbusplus::common::xyz::openbmc_project::network::convertForMessage(
             AddrFamily<family>::protocol);
     stdplus::ToStrHandle<stdplus::ToStr<typename AddrFamily<family>::addr>> tsh;
-    newreq.append(protocol, tsh(address), prefix, "");
+    newreq.append(protocol, tsh(address), prefix, index,"");
     bus.call_noreply(newreq);
 }
 
@@ -305,12 +310,8 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
         fallbackPrefix = ifaddr->prefix;
         deleteObjectIfExists(bus, params.service, ifaddr->path);
     }
-    auto addr = address.value_or(ifaddr->address);
-    if (addr != stdplus::In4Addr{})
-    {
-        createIfAddr<AF_INET>(bus, params, addr,
-                              prefix.value_or(fallbackPrefix));
-    }
+
+    createIfAddr<AF_INET>(bus, params, address.value_or(ifaddr->address), prefix.value_or(fallbackPrefix));
 }
 
 template <int family>
@@ -339,22 +340,109 @@ template <int family>
 void reconfigureGatewayMAC(sdbusplus::bus_t& bus, const ChannelParams& params,
                            stdplus::EtherAddr mac)
 {
-    auto gateway = getGatewayProperty<family>(bus, params);
-    if (!gateway)
+    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
+    if (oldStaticAddr.empty())
     {
         log<level::ERR>("Tried to set Gateway MAC without Gateway");
         elog<InternalFailure>();
     }
 
     ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
-    auto neighbor = findStaticNeighbor<family>(bus, params, *gateway,
+    auto neighbor = findStaticNeighbor<family>(bus, params, stdplus::fromStr<stdplus::In6Addr>(oldStaticAddr),
                                                neighbors);
+    auto prefixLength=neighbor->prefixLength;
+
     if (neighbor)
     {
         deleteObjectIfExists(bus, params.service, neighbor->path);
     }
 
-    createNeighbor<family>(bus, params, *gateway, mac);
+    createNeighbor<family>(bus, params, stdplus::fromStr<stdplus::In6Addr>(oldStaticAddr), mac, prefixLength);
+}
+
+
+template <int family>
+void reconfigureGatewayPrefixLength(sdbusplus::bus_t& bus, const ChannelParams& params,
+                           const uint8_t prefixLength)
+{
+    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
+    if (oldStaticAddr.empty())
+    {
+        log<level::ERR>("Tried to set Gateway MAC without Gateway");
+        elog<InternalFailure>();
+    }
+
+    ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
+    auto neighbor =
+        findStaticNeighbor<family>(bus, params, stdplus::fromStr<stdplus::In6Addr>(oldStaticAddr), neighbors);
+
+    auto mac=neighbor->mac;
+
+    if (neighbor)
+    {
+        deleteObjectIfExists(bus, params.service, neighbor->path);
+    }
+
+    createNeighbor<family>(bus, params, stdplus::fromStr<stdplus::In6Addr>(oldStaticAddr), mac, prefixLength);
+}
+
+/** @brief Gets the IPv6 Static Router value
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @return networkd IPv6EnableStaticRtr value
+ */
+static bool getIPv6StaticRtr(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto enabled = std::get<bool>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6EnableStaticRtr"));
+    return enabled;
+}
+
+template <int family>
+std::string getStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto addr = std::get<std::string>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6StaticRtrAddr"));
+    return addr;
+}
+
+void setStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params, in6_addr& address)
+{
+    // Save the old gateway MAC address if it exists so we can recreate it
+    auto oldStaticAddr = getStaticRtrAddr<AF_INET6>(bus, params);
+    std::optional<IfNeigh<AF_INET6>> neighbor;
+    if (!oldStaticAddr.empty())
+    {
+        ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
+        neighbor = findStaticNeighbor<AF_INET6>(bus, params, stdplus::fromStr<stdplus::In6Addr>(oldStaticAddr), neighbors);
+        if (neighbor)
+        {
+            deleteObjectIfExists(bus, params.service, neighbor->path);
+        }
+    }
+
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6StaticRtrAddr", stdplus::toStr(stdplus::In6Addr{address}));
+    createNeighbor<AF_INET6>(bus, params, address, stdplus::fromStr<stdplus::EtherAddr>("00:00:00:00:00:00"), AddrFamily<AF_INET6>::defaultPrefix);
+}
+
+template <int family>
+std::optional<IfNeigh<family>> getStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params) {
+    ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
+    auto routerAddr = getStaticRtrAddr<AF_INET6>(bus, params);
+    auto addr = stdplus::fromStr<stdplus::In6Addr>(routerAddr);
+    return findStaticNeighbor<AF_INET6>(bus, params, addr, neighbors);
+}
+
+/** @brief Sets the IPv6EnableStaticRtr flag
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] enabled       - boolean to enable/disable IPv6 static router
+ */
+void setIPv6StaticRtr(sdbusplus::bus_t& bus, const ChannelParams& params,
+                     const bool enabled)
+{
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,
+                    "IPv6EnableStaticRtr", enabled);
 }
 
 /** @brief Deconfigures the IPv6 address info configured for the interface
@@ -385,7 +473,7 @@ void reconfigureIfAddr6(sdbusplus::bus_t& bus, const ChannelParams& params,
                         uint8_t idx, stdplus::In6Addr address, uint8_t prefix)
 {
     deconfigureIfAddr6(bus, params, idx);
-    createIfAddr<AF_INET6>(bus, params, address, prefix);
+    createIfAddr<AF_INET6>(bus, params, address, prefix, idx);
 }
 
 /** @brief Converts the AddressOrigin into an IPv6Source
@@ -456,14 +544,24 @@ void getLanIPv6Address(message::Payload& ret, uint8_t channel, uint8_t set,
  */
 uint16_t getVLANProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
 {
+    auto vlan = 0;
     // VLAN devices will always have a separate logical object
     if (params.ifPath == params.logicalPath)
     {
-        return 0;
+        return vlan;
     }
+    try
+    {
+        vlan = std::get<uint32_t>(getDbusProperty(
+            bus, params.service, params.logicalPath, INTF_VLAN, "Id"));
+    }
+    catch (const sdbusplus::exception::SdBusError& e)
+    {
+        log<level::ERR>("error in getVLANProperty", entry("name=%s", e.name()),
+                        entry("what=%s", e.what()));
+        elog<InternalFailure>();
+     }
 
-    auto vlan = std::get<uint32_t>(getDbusProperty(
-        bus, params.service, params.logicalPath, INTF_VLAN, "Id"));
     if ((vlan & VLAN_VALUE_MASK) != vlan)
     {
         logWithChannel<level::ERR>(params, "networkd returned an invalid vlan",
@@ -473,42 +571,59 @@ uint16_t getVLANProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
     return vlan;
 }
 
-/** @brief Deletes all of the possible configuration parameters for a channel
+/** @brief Gets the vlan Priority configured on the interface
  *
  *  @param[in] bus    - The bus object used for lookups
  *  @param[in] params - The parameters for the channel
  */
-void deconfigureChannel(sdbusplus::bus_t& bus, ChannelParams& params)
+uint16_t getVLANPriority(sdbusplus::bus::bus& bus, const ChannelParams& params)
 {
-    // Delete all objects associated with the interface
-    auto objreq = bus.new_method_call(MAPPER_BUS_NAME, MAPPER_OBJ, MAPPER_INTF,
-                                      "GetSubTree");
-    objreq.append(std::string_view(PATH_ROOT), 0,
-                  std::vector<std::string>{DELETE_INTERFACE});
-    auto objreply = bus.call(objreq);
-    ObjectTree objs;
-    objreply.read(objs);
-    for (const auto& [path, impls] : objs)
+    auto vlan = 0;
+    if (params.ifPath == params.logicalPath)
     {
-        if (!ifnameInPath(params.ifname, path))
-        {
-            continue;
-        }
-        for (const auto& [service, intfs] : impls)
-        {
-            deleteObjectIfExists(bus, service, path);
-        }
-        // Update params to reflect the deletion of vlan
-        if (path == params.logicalPath)
-        {
-            params.logicalPath = params.ifPath;
-        }
+        return vlan;
+    }
+    try
+    {
+        vlan = std::get<uint32_t>(getDbusProperty(
+            bus, params.service, params.logicalPath, INTF_VLAN, "Priority"));
+    }
+    catch (const sdbusplus::exception::SdBusError& e)
+    {
+        log<level::ERR>("error in getVLANPriority", entry("name=%s", e.name()),
+                        entry("what=%s", e.what()));
+        elog<InternalFailure>();
+    }
+     return vlan;
+}
+
+/** @brief Sets the vlan Priority configured on the interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @param[in] vlan_priority - The priority for VLAN
+ *  @return 1 if VLAN available else 0
+ */
+uint16_t setVLANPriority(sdbusplus::bus::bus& bus, const ChannelParams& params, uint32_t vlan_priority)
+{
+    // VLAN devices will always have a separate logical object
+    if (params.ifPath == params.logicalPath)
+    {
+        return 0;
     }
 
-    // Clear out any settings on the lower physical interface
-    setEthProp(bus, params, "DHCP4", false);
-    setEthProp(bus, params, "DHCP6", false);
-    setEthProp(bus, params, "IPv6AcceptRA", false);
+    try
+    {
+        setDbusProperty(bus, params.service, params.logicalPath, INTF_VLAN,
+                        "Priority", vlan_priority);
+    }
+     catch (const sdbusplus::exception::SdBusError& e)
+    {
+        log<level::ERR>("error in setVLANPriority", entry("name=%s", e.name()),
+                        entry("what=%s", e.what()));
+        elog<InternalFailure>();
+     }
+     return 1;
 }
 
 /** @brief Creates a new VLAN on the specified interface
@@ -517,80 +632,73 @@ void deconfigureChannel(sdbusplus::bus_t& bus, ChannelParams& params)
  *  @param[in] params - The parameters for the channel
  *  @param[in] vlan   - The id of the new vlan
  */
-void createVLAN(sdbusplus::bus_t& bus, ChannelParams& params, uint16_t vlan)
+void createVLAN(sdbusplus::bus::bus& bus, ChannelParams& params, uint16_t vlan)
 {
-    if (vlan == 0)
+    auto vlanid = getVLANProperty(bus, params);
+    if (vlanid == vlan)
     {
         return;
     }
-
-    auto req = bus.new_method_call(params.service.c_str(), PATH_ROOT.c_str(),
-                                   INTF_VLAN_CREATE, "VLAN");
-    req.append(params.ifname, static_cast<uint32_t>(vlan));
-    auto reply = bus.call(req);
-    sdbusplus::message::object_path newPath;
-    reply.read(newPath);
-    params.logicalPath = std::move(newPath);
+    try
+    {
+        auto req = bus.new_method_call(params.service.c_str(), std::string(PATH_ROOT).c_str(),
+                                       INTF_VLAN_CREATE, "VLAN");
+        req.append(params.ifname, static_cast<uint32_t>(vlan));
+        bus.call_noreply(req);
+    }
+    catch (const sdbusplus::exception::SdBusError& e)
+    {
+        log<level::ERR>("error in createVLAN", entry("name=%s", e.name()),
+                        entry("what=%s", e.what()));
+        elog<InternalFailure>();
+    }
 }
 
-/** @brief Performs the necessary reconfiguration to change the VLAN
+/** @brief Creates a new VLAN on the specified interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ */
+int getVLANNum([[maybe_unused]]sdbusplus::bus::bus& bus, ChannelParams& params) {
+    return params.numIntfVlan;
+}
+
+/** @brief delete a VLAN on the specified interface
  *
  *  @param[in] bus    - The bus object used for lookups
  *  @param[in] params - The parameters for the channel
  *  @param[in] vlan   - The new vlan id to use
  */
-void reconfigureVLAN(sdbusplus::bus_t& bus, ChannelParams& params,
-                     uint16_t vlan)
+void deleteVLAN(sdbusplus::bus::bus& bus, ChannelParams& params, uint16_t vlan)
 {
-    // Unfortunatetly we don't have built-in functions to migrate our interface
-    // customizations to new VLAN interfaces, or have some kind of decoupling.
-    // We therefore must retain all of our old information, setup the new VLAN
-    // configuration, then restore the old info.
+    auto vlanid = getVLANProperty(bus, params);
+    if (vlanid == vlan && vlanid != 0)
+    {
+        deleteObjectIfExists(bus, params.service, params.logicalPath);
+    }
+}
 
-    // Save info from the old logical interface
-    bool dhcp4 = getEthProp<bool>(bus, params, "DHCP4");
-    bool dhcp6 = getEthProp<bool>(bus, params, "DHCP6");
-    bool ra = getEthProp<bool>(bus, params, "IPv6AcceptRA");
-    ObjectLookupCache ips(bus, params, INTF_IP);
-    auto ifaddr4 = findIfAddr<AF_INET>(bus, params, 0, originsV4, ips);
-    std::vector<IfAddr<AF_INET6>> ifaddrs6;
-    for (uint8_t i = 0; i < MAX_IPV6_STATIC_ADDRESSES; ++i)
-    {
-        auto ifaddr6 = findIfAddr<AF_INET6>(bus, params, i, originsV6Static,
-                                            ips);
-        if (!ifaddr6)
-        {
-            break;
-        }
-        ifaddrs6.push_back(std::move(*ifaddr6));
+template<int family>
+void enableIPAddressing(sdbusplus::bus::bus& bus, ChannelParams& params, bool enabled) {
+    in_addr ip;
+    if (enabled && family == AF_INET) {
+        setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, AddrFamily<family>::propertyIPEnabled, enabled);
+    } // if
+    else if (!enabled && family == AF_INET) {
+        memset(&ip, 0, sizeof(in_addr));
+        setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, AddrFamily<family>::propertyIPEnabled, enabled);
+    } // else if
+    else if (enabled && family == AF_INET6) {
+        setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, AddrFamily<family>::propertyIPEnabled, enabled);
+    } // else if
+    else if (!enabled && family == AF_INET6) {
+        setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, AddrFamily<family>::propertyIPEnabled, enabled);
     }
-    ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
-    auto neighbor4 = findGatewayNeighbor<AF_INET>(bus, params, neighbors);
-    auto neighbor6 = findGatewayNeighbor<AF_INET6>(bus, params, neighbors);
+}
 
-    deconfigureChannel(bus, params);
-    createVLAN(bus, params, vlan);
-
-    // Re-establish the saved settings
-    setEthProp(bus, params, "DHCP4", dhcp4);
-    setEthProp(bus, params, "DHCP6", dhcp6);
-    setEthProp(bus, params, "IPv6AcceptRA", ra);
-    if (ifaddr4)
-    {
-        createIfAddr<AF_INET>(bus, params, ifaddr4->address, ifaddr4->prefix);
-    }
-    for (const auto& ifaddr6 : ifaddrs6)
-    {
-        createIfAddr<AF_INET6>(bus, params, ifaddr6.address, ifaddr6.prefix);
-    }
-    if (neighbor4)
-    {
-        createNeighbor<AF_INET>(bus, params, neighbor4->ip, neighbor4->mac);
-    }
-    if (neighbor6)
-    {
-        createNeighbor<AF_INET6>(bus, params, neighbor6->ip, neighbor6->mac);
-    }
+template<int family>
+bool getIPAddressingState(sdbusplus::bus::bus& bus, ChannelParams& params) {
+    return std::get<bool>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, AddrFamily<family>::propertyIPEnabled));
 }
 
 // We need to store this value so it can be returned to the client
@@ -715,6 +823,89 @@ std::optional<bool> isLanChannel(uint8_t channel)
            static_cast<uint8_t>(EChannelMediumType::lan8032);
 }
 
+/** @brief Sets the BMC  Generated ARP Response state on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] ARPResponse  - True: Enable BMC Generated ARP Response
+ *                             False: Disable BMC Generated ARP Response
+ */
+void setARPProperty(sdbusplus::bus::bus& bus, const ChannelParams& params,
+                       bool ARPResponse)
+{
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ARPCONTROL,
+                    "ARPResponse", ARPResponse);
+}
+
+/** @brief Sets the BMC Generated GratuitousARP state on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] ARPResponse  - True: Enable BMC Generated GARP Response
+ *                             False: Disable BMC Generated GARP Response
+ */
+void setGARPProperty(sdbusplus::bus::bus& bus, const ChannelParams& params,
+                       bool GARPResponse)
+{
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ARPCONTROL,
+                    "GratuitousARP", GARPResponse);
+}
+
+/** @brief Sets the GratuitousARP Interval on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] GARPInterval  - GratuitousARPInterval
+ */
+void setGARPIntervalProperty(sdbusplus::bus::bus& bus, const ChannelParams& params,
+                      uint64_t GARPInterval)
+{
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ARPCONTROL,
+                    "GratuitousARPInterval", GARPInterval);
+}
+
+/** @brief Gets the BMC  Generated ARP Response state on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return status of ARP Response
+ */
+uint8_t getARPProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    bool arpstatus = std::get<bool>(getDbusProperty(
+        bus, params.service, params.logicalPath, INTF_ARPCONTROL, "ARPResponse"));
+
+    return ((arpstatus)?2:0);
+}
+
+/** @brief Gets the BMC Generated GratuitousARP state on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return status of GratuitousARP
+ */
+uint8_t getGARPProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    bool garpstatus = std::get<bool>(getDbusProperty(
+        bus, params.service, params.logicalPath, INTF_ARPCONTROL, "GratuitousARP"));
+
+    return ((garpstatus)?1:0);
+}
+
+/** @brief Gets the GratuitousARP Interval on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return GARP Interval
+ */
+uint8_t getGARPIntervalProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    uint64_t garpInterval = std::get<uint64_t>(getDbusProperty(
+        bus, params.service, params.logicalPath, INTF_ARPCONTROL, "GratuitousARPInterval"));
+
+    return (garpInterval/500);
+}
+
 RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     uint8_t parameter, message::Payload& req)
 {
@@ -731,6 +922,22 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
     {
         log<level::ERR>("Set Lan - Not a LAN channel");
         return responseInvalidFieldRequest();
+    }
+
+    if (!channelCall<getIPAddressingState<AF_INET>>(channel)) {
+        if ( ( static_cast<LanParam>(parameter) >= LanParam::IP && static_cast<LanParam>(parameter) <= LanParam::SubnetMask )
+            || ( static_cast<LanParam>(parameter) == LanParam::Gateway1 )
+            || ( static_cast<LanParam>(parameter) == LanParam::Gateway1MAC )) {
+            req.trailingOk = true;
+            return responseCommandNotAvailable();
+        }
+    }
+
+    if (!channelCall<getIPAddressingState<AF_INET6>>(channel)) {
+        if ( static_cast<LanParam>(parameter) >= LanParam::IPv6Status && static_cast<LanParam>(parameter) <= LanParam::IPv6StaticRouter1PrefixValue ) {
+            req.trailingOk = true;
+            return responseCommandNotAvailable();
+        }
     }
 
     switch (static_cast<LanParam>(parameter))
@@ -767,11 +974,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     return responseSuccess();
                 }
                 case SetStatus::Commit:
-                    if (getSetStatus(channel) != SetStatus::InProgress)
-                    {
-                        return responseInvalidFieldRequest();
-                    }
-                    return responseSuccess();
+                   return response(ccParamNotSupported);
             }
             return response(ccParamNotSupported);
         }
@@ -793,6 +996,9 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             }
             auto ip = unpackT<stdplus::In4Addr>(req);
             unpackFinal(req);
+            if (!ipmi::utility::ip_address::isValidIPv4Addr((in_addr*)(&ip.a), ipmi::utility::ip_address::Type::IP4_ADDRESS)) {
+                return responseInvalidFieldRequest();
+            }
             channelCall<reconfigureIfAddr4>(channel, ip, std::nullopt);
             return responseSuccess();
         }
@@ -819,7 +1025,9 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     channelCall<setEthProp<bool>>(channel, "DHCP4", true);
                     return responseSuccess();
                 case IPSrc::Unspecified:
+                    return responseInvalidFieldRequest();
                 case IPSrc::Static:
+                    channelCall<reconfigureIfAddr4>(channel, std::nullopt, std::nullopt);
                     channelCall<setEthProp<bool>>(channel, "DHCP4", false);
                     return responseSuccess();
                 case IPSrc::BIOS:
@@ -846,6 +1054,53 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             channelCall<reconfigureIfAddr4>(channel, std::nullopt, pfx);
             return responseSuccess();
         }
+        case LanParam::BMCARPControl:
+        {
+            uint8_t enables;
+            if (req.unpack(enables) != 0 || !req.fullyUnpacked())
+            {
+                return responseReqDataLenInvalid();
+            }
+            switch (static_cast<ARPControlEnables>(enables))
+            {
+                case ARPControlEnables::BMCARPControlDisable:
+                {
+                    channelCall<setARPProperty>(channel, false);
+                    channelCall<setGARPProperty>(channel, false);
+                    return responseSuccess();
+                }
+                case ARPControlEnables::BMCGARPOnly:
+                {
+                    channelCall<setARPProperty>(channel, false);
+                    channelCall<setGARPProperty>(channel, true);
+                    return responseSuccess();
+                }
+                case ARPControlEnables::BMCARPOnly:
+                {
+                    channelCall<setARPProperty>(channel, true);
+                    channelCall<setGARPProperty>(channel, false);
+                    return responseSuccess();
+                }
+                case ARPControlEnables::BMCARPControlBoth:
+                {
+                    channelCall<setARPProperty>(channel, true);
+                    channelCall<setGARPProperty>(channel, true);
+                    return responseSuccess();
+                }
+            }
+            return response(ccParamNotSupported);
+        }
+        case LanParam::GARPInterval:
+        {
+            uint8_t interval;
+            if (req.unpack(interval) != 0 || !req.fullyUnpacked())
+            {
+                return responseReqDataLenInvalid();
+            }
+            uint64_t garpInterval = interval * 500;
+            channelCall<setGARPIntervalProperty>(channel, garpInterval);
+            return responseSuccess();
+        }
         case LanParam::Gateway1:
         {
             if (channelCall<getEthProp<bool>>(channel, "DHCP4"))
@@ -854,15 +1109,22 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             }
             auto gateway = unpackT<stdplus::In4Addr>(req);
             unpackFinal(req);
+            auto ifaddr = channelCall<getIfAddr4>(channel);
+            if (ifaddr)
+            {
+                auto addr = ifaddr->address;
+                auto netmask = stdplus::pfxToMask<stdplus::In4Addr>(ifaddr->prefix);
+                if ((addr.a.s_addr & netmask.a.s_addr) != (gateway.a.s_addr & netmask.a.s_addr)) {
+                    return responseInvalidFieldRequest();
+                }
+            }
             channelCall<setGatewayProperty<AF_INET>>(channel, gateway);
             return responseSuccess();
         }
         case LanParam::Gateway1MAC:
         {
-            auto gatewayMAC = unpackT<stdplus::EtherAddr>(req);
-            unpackFinal(req);
-            channelCall<reconfigureGatewayMAC<AF_INET>>(channel, gatewayMAC);
-            return responseSuccess();
+            log<level::ERR>("Set Lan - Not allow to set gateway MAC Address");
+            return response(ipmiCCWriteReadParameter);
         }
         case LanParam::VLANId:
         {
@@ -886,10 +1148,45 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             if (!vlanEnable)
             {
                 lastDisabledVlan[channel] = vlan;
-                vlan = 0;
+                channelCall<deleteVLAN>(channel, vlan);
+                return responseSuccess();
+            }
+            else if (vlan == 0 || vlan == VLAN_VALUE_MASK)
+            {
+                return responseInvalidFieldRequest();
+            }
+            if ( channelCall<getVLANNum>(channel) >= VLAN_MAX_NUM ) {
+                log<level::ERR>("The number of VLAN interface of this parent interface is out of range, so skip this command...\n");
+                return responseCommandNotAvailable();
+            }
+            else
+                channelCall<createVLAN>(channel, vlan);
+           return responseSuccess();
+        }
+        case LanParam::VLANPriority:
+        {
+            uint5_t reserved = 0;
+            uint3_t vlanPriority = 0;
+            if (req.unpack(vlanPriority) || req.unpack(reserved) ||
+                (!req.fullyUnpacked()))
+            {
+                return responseReqDataLenInvalid();
             }
 
-            channelCall<reconfigureVLAN>(channel, vlan);
+            if (((uint32_t)vlanPriority) > maxPriority)
+            {
+                return responseInvalidFieldRequest();
+            }
+            if (reserved)
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            if (channelCall<setVLANPriority>(channel, (uint32_t)vlanPriority) ==
+                0)
+            {
+                return responseCommandNotAvailable();
+            }
             return responseSuccess();
         }
         case LanParam::CiphersuiteSupport:
@@ -910,10 +1207,17 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             switch (static_cast<IPFamilyEnables>(enables))
             {
                 case IPFamilyEnables::DualStack:
+                    channelCall<enableIPAddressing<AF_INET>>(channel, true);
+                    channelCall<enableIPAddressing<AF_INET6>>(channel, true);
                     return responseSuccess();
                 case IPFamilyEnables::IPv4Only:
+                    channelCall<enableIPAddressing<AF_INET>>(channel, true);
+                    channelCall<enableIPAddressing<AF_INET6>>(channel, false);
+                    return responseSuccess();
                 case IPFamilyEnables::IPv6Only:
-                    return response(ccParamNotSupported);
+                    channelCall<enableIPAddressing<AF_INET>>(channel, false);
+                    channelCall<enableIPAddressing<AF_INET6>>(channel, true);
+                    return responseSuccess();
             }
             return response(ccParamNotSupported);
         }
@@ -943,18 +1247,37 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseInvalidFieldRequest();
             }
+            if (set >= MAX_IPV6_STATIC_ADDRESSES)
+            {
+                return responseParmOutOfRange();
+            }
+
             if (enabled)
             {
+                if (!ipmi::utility::ip_address::isValidIPv6Addr((in6_addr*)(&ip.__in6_u), ipmi::utility::ip_address::Type::IP6_ADDRESS)) {
+                    return responseInvalidFieldRequest();
+                }
                 if (prefix < MIN_IPV6_PREFIX_LENGTH ||
                     prefix > MAX_IPV6_PREFIX_LENGTH)
                 {
                     return responseParmOutOfRange();
+                }
+                if (channelCall<getEthProp<bool>>(channel, "DHCP6")) {
+                    channelCall<setEthProp<bool>>(channel, "DHCP6", false);
                 }
                 channelCall<reconfigureIfAddr6>(channel, set, ip, prefix);
             }
             else
             {
                 channelCall<deconfigureIfAddr6>(channel, set);
+                auto nums = channelCall<getIfAddrNum<AF_INET6>>(channel, originsV6Static);
+                if (nums == 0) {
+                    channelCall<setEthProp<bool>>(channel, "DHCP6", true);
+
+                    //We disable IPv6 Router Address Configuration static control field as only applicable when IPv6 is static
+                    IPv6RouterControlFlag::StaticControl=0;
+                    channelCall<setIPv6StaticRtr>(channel, IPv6RouterControlFlag::StaticControl);
+                } // if
             }
             return responseSuccess();
         }
@@ -976,48 +1299,88 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                                         std::bitset<8>(reservedRACCBits));
                 expected.any())
             {
-                return response(ccParamNotSupported);
+                return responseInvalidFieldRequest();
             }
+
+            if (channelCall<getEthProp<bool>>(channel, "DHCP6"))
+            {
+                return responseCommandNotAvailable();
+            }
+
+            IPv6RouterControlFlag::StaticControl = control[IPv6RouterControlFlag::Static];
 
             bool enableRA = control[IPv6RouterControlFlag::Dynamic];
             channelCall<setEthProp<bool>>(channel, "IPv6AcceptRA", enableRA);
             channelCall<setEthProp<bool>>(channel, "DHCP6", enableRA);
+
+            bool enableStaticRtr = IPv6RouterControlFlag::StaticControl;
+            channelCall<setIPv6StaticRtr>(channel, enableStaticRtr);
             return responseSuccess();
         }
         case LanParam::IPv6StaticRouter1IP:
         {
-            auto gateway = unpackT<stdplus::In6Addr>(req);
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            in6_addr routeAddr = unpackT<stdplus::In6Addr>(req);
             unpackFinal(req);
-            channelCall<setGatewayProperty<AF_INET6>>(channel, gateway);
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+
+            channelCall<setStaticRtrAddr>(channel, routeAddr);
             return responseSuccess();
         }
         case LanParam::IPv6StaticRouter1MAC:
         {
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
             auto mac = unpackT<stdplus::EtherAddr>(req);
             unpackFinal(req);
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+            
             channelCall<reconfigureGatewayMAC<AF_INET6>>(channel, mac);
             return responseSuccess();
         }
         case LanParam::IPv6StaticRouter1PrefixLength:
         {
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
             uint8_t prefix;
             if (req.unpack(prefix) != 0)
             {
                 return responseReqDataLenInvalid();
             }
             unpackFinal(req);
-            if (prefix != 0)
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+            if (prefix > MAX_IPV6_PREFIX_LENGTH)
             {
                 return responseInvalidFieldRequest();
             }
+            channelCall<reconfigureGatewayPrefixLength<AF_INET6>>(channel, prefix);
             return responseSuccess();
         }
         case LanParam::IPv6StaticRouter1PrefixValue:
         {
-            unpackT<stdplus::In6Addr>(req);
+            // Accept only null prefix value since currently not in use
+            in6_addr ip = unpackT<stdplus::In6Addr>(req);
             unpackFinal(req);
-            // Accept any prefix value since our prefix length has to be 0
-            return responseSuccess();
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+
+            if(IN6_IS_ADDR_UNSPECIFIED(&ip))
+            {
+                return responseSuccess();
+            }
+            else
+            {
+                return responseInvalidFieldRequest();
+            }
         }
         case LanParam::cipherSuitePrivilegeLevels:
         {
@@ -1087,6 +1450,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
     message::Payload ret;
     constexpr uint8_t current_revision = 0x11;
     ret.pack(current_revision);
+    log<level::ERR>("Get Lan - Invalid field in request");
 
     if (revOnly)
     {
@@ -1189,6 +1553,20 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             ret.pack(stdplus::raw::asView<char>(netmask));
             return responseSuccess(std::move(ret));
         }
+        case LanParam::BMCARPControl:
+        {
+            uint8_t arp = channelCall<getARPProperty>(channel);
+            uint8_t garp = channelCall<getGARPProperty>(channel);
+            arp = (arp|garp);
+            ret.pack(stdplus::raw::asView<char>(arp));
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::GARPInterval:
+        {
+            uint8_t interval = channelCall<getGARPIntervalProperty>(channel);
+            ret.pack(stdplus::raw::asView<char>(interval));
+            return responseSuccess(std::move(ret));
+        }
         case LanParam::Gateway1:
         {
             auto gateway = channelCall<getGatewayProperty<AF_INET>>(channel);
@@ -1252,7 +1630,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         case LanParam::IPFamilySupport:
         {
             std::bitset<8> support;
-            support[IPFamilySupportFlag::IPv6Only] = 0;
+            support[IPFamilySupportFlag::IPv6Only] = 1;
             support[IPFamilySupportFlag::DualStack] = 1;
             support[IPFamilySupportFlag::IPv6Alerts] = 1;
             ret.pack(support);
@@ -1260,7 +1638,20 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         }
         case LanParam::IPFamilyEnables:
         {
-            ret.pack(static_cast<uint8_t>(IPFamilyEnables::DualStack));
+            uint8_t enable = 0;
+            auto ipv4 = channelCall<getIPAddressingState<AF_INET>>(channel);
+            auto ipv6 = channelCall<getIPAddressingState<AF_INET6>>(channel);
+            if (ipv4 && ipv6) {
+                enable = 2;
+            }
+            else if (ipv4 && !ipv6) {
+                enable = 0;
+            }
+            else if (!ipv4 && ipv6) {
+                enable = 1;
+            }
+
+            ret.pack(enable);
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6Status:
@@ -1296,41 +1687,62 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             std::bitset<8> control;
             control[IPv6RouterControlFlag::Dynamic] =
                 channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA");
-            control[IPv6RouterControlFlag::Static] = 1;
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            control[IPv6RouterControlFlag::Static] = IPv6RouterControlFlag::StaticControl;
             ret.pack(control);
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6StaticRouter1IP:
         {
-            stdplus::In6Addr gateway{};
+            std::string routerAddr;
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
             if (!channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA"))
             {
-                gateway =
-                    channelCall<getGatewayProperty<AF_INET6>>(channel).value_or(
-                        stdplus::In6Addr{});
+                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel);
             }
-            ret.pack(stdplus::raw::asView<char>(gateway));
+            ret.pack(stdplus::raw::asView<char>(routerAddr));
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6StaticRouter1MAC:
         {
             stdplus::EtherAddr mac{};
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
             auto neighbor = channelCall<getGatewayNeighbor<AF_INET6>>(channel);
-            if (neighbor)
+            if(IPv6RouterControlFlag::StaticControl)
             {
-                mac = neighbor->mac;
+                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel);
+                if (neighbor)
+                {
+                    mac = neighbor->mac;
+                }
             }
             ret.pack(stdplus::raw::asView<char>(mac));
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6StaticRouter1PrefixLength:
         {
-            ret.pack(UINT8_C(0));
+            uint8_t prefixLength = 0;
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            if(IPv6RouterControlFlag::StaticControl)
+            {
+                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel);
+                if (neighbor)
+                {
+                    prefixLength = neighbor->prefixLength;
+                }
+            }
+            ret.pack(UINT8_C(prefixLength));
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6StaticRouter1PrefixValue:
         {
             ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::VLANPriority:
+        {
+            uint8_t vlanPriority = channelCall<getVLANPriority>(channel);
+            ret.pack(vlanPriority);
             return responseSuccess(std::move(ret));
         }
         case LanParam::cipherSuitePrivilegeLevels:
