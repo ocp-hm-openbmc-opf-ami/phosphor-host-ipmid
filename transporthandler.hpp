@@ -400,7 +400,7 @@ std::optional<typename AddrFamily<family>::addr>
 {
     auto objPath = "/xyz/openbmc_project/network/" + params.ifname;
     auto gatewayStr = std::get<std::string>(
-        getDbusProperty(bus, params.service, objPath, INTF_ETHERNET,
+        getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,
                         AddrFamily<family>::propertyGateway));
     if (gatewayStr.empty())
     {
@@ -498,7 +498,7 @@ void setGatewayProperty(sdbusplus::bus_t& bus, const ChannelParams& params,
     }
 
     auto objPath = "/xyz/openbmc_project/network/" + params.ifname;
-    setDbusProperty(bus, params.service, objPath, INTF_ETHERNET,
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,
                     AddrFamily<family>::propertyGateway,
                     stdplus::toStr(address));
 

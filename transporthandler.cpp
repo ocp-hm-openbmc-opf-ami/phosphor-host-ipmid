@@ -671,10 +671,11 @@ int getVLANNum([[maybe_unused]]sdbusplus::bus::bus& bus, ChannelParams& params) 
  */
 void deleteVLAN(sdbusplus::bus::bus& bus, ChannelParams& params, uint16_t vlan)
 {
-    auto vlanid = getVLANProperty(bus, params);
-    if (vlanid == vlan && vlanid != 0)
-    {
-        deleteObjectIfExists(bus, params.service, params.logicalPath);
+    auto logicalPath = params.ifPath + "_" + std::to_string(vlan);
+    try {
+        deleteObjectIfExists(bus, params.service, logicalPath);
+    } catch (const std::exception &e) {
+        logWithChannel<level::ERR>(params, "Invalid vlanID", entry("VLAN=%", vlan));
     }
 }
 
