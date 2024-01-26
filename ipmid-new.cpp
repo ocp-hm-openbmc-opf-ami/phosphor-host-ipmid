@@ -49,6 +49,10 @@
 #include <utility>
 #include <vector>
 
+// Channel number assignments
+static constexpr unsigned short sysInterface = 0x0F;
+static constexpr unsigned short dbusInterface = 0x08;
+
 namespace fs = std::filesystem;
 
 using namespace phosphor::logging;
@@ -256,7 +260,15 @@ message::Response::ptr executeIpmiCommandCommon(
             return filterResponse;
         }
         HandlerTuple& chosen = cmdIter->second;
-        if (request->ctx->priv < std::get<Privilege>(chosen))
+        // if (request->ctx->priv < std::get<Privilege>(chosen))
+        if (request->ctx->channel != dbusInterface &&
+            request->ctx->channel != sysInterface &&
+            std::get<Privilege>(chosen) == Privilege::sysIface)
+        {
+            return errorResponse(request, ccInsufficientPrivilege);
+        }
+        if ((request->ctx->priv < std::get<Privilege>(chosen)) &&
+            (std::get<Privilege>(chosen) != Privilege::sysIface))
         {
             return errorResponse(request, ccInsufficientPrivilege);
         }
@@ -275,7 +287,15 @@ message::Response::ptr executeIpmiCommandCommon(
                 return filterResponse;
             }
             HandlerTuple& chosen = cmdIter->second;
-            if (request->ctx->priv < std::get<Privilege>(chosen))
+            // if (request->ctx->priv < std::get<Privilege>(chosen))
+            if (request->ctx->channel != dbusInterface &&
+                request->ctx->channel != sysInterface &&
+                std::get<Privilege>(chosen) == Privilege::sysIface)
+            {
+                return errorResponse(request, ccInsufficientPrivilege);
+            }
+            if ((request->ctx->priv < std::get<Privilege>(chosen)) &&
+                (std::get<Privilege>(chosen) != Privilege::sysIface))
             {
                 return errorResponse(request, ccInsufficientPrivilege);
             }
