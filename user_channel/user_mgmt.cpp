@@ -100,6 +100,8 @@ static constexpr const char* allGrpProperty = "AllGroups";
 static constexpr const char* userPrivProperty = "UserPrivilege";
 static constexpr const char* userGrpProperty = "UserGroups";
 static constexpr const char* userEnabledProperty = "UserEnabled";
+//OEM Privilege
+static constexpr const char* mediaGroup = "media";
 
 static std::array<std::string, (PRIVILEGE_OEM + 1)> ipmiPrivIndex = {
     "priv-reserved", // PRIVILEGE_RESERVED - 0
@@ -1059,7 +1061,13 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
             auto method = bus.new_method_call(
                 getUserServiceName().c_str(), userMgrObjBasePath,
                 userMgrInterface, createUserMethod);
-            method.append(userName.c_str(), availableGroups,
+            std::vector<std::string> groups = availableGroups;
+            //find media group and remove it, by default user privilege user should not have media privilege
+            auto mediaGrpEntry = find(groups.begin(), groups.end(), mediaGroup);
+            if (mediaGrpEntry != groups.end()) {
+                groups.erase(mediaGrpEntry);
+            } 
+            method.append(userName.c_str(), groups,
                           ipmiPrivIndex[PRIVILEGE_USER], false);
             auto reply = bus.call(method);
         }
