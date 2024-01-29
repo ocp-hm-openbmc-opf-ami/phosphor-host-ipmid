@@ -184,6 +184,12 @@ Cc ipmiUserSetUserPayloadAccess(const uint8_t chNum, const uint8_t operation,
                                 const uint8_t userId,
                                 const PayloadAccess& payloadAccess)
 {
+    std::string userName;
+    ipmiUserGetUserName(userId, userName);
+    if (userName.empty())
+    {
+        return ccInvalidFieldRequest;
+    }
     if (!UserAccess::isValidChannel(chNum))
     {
         return ccInvalidFieldRequest;
@@ -200,6 +206,12 @@ Cc ipmiUserSetUserPayloadAccess(const uint8_t chNum, const uint8_t operation,
 Cc ipmiUserGetUserPayloadAccess(const uint8_t chNum, const uint8_t userId,
                                 PayloadAccess& payloadAccess)
 {
+    std::string userName;
+    ipmiUserGetUserName(userId, userName);
+    if (userName.empty())
+    {
+        return ccInvalidFieldRequest;
+    }
     if (!UserAccess::isValidChannel(chNum))
     {
         return ccInvalidFieldRequest;
