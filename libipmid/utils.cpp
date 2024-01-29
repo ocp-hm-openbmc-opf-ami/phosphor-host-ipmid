@@ -568,6 +568,7 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
                       std::vector<uint8_t> writeData,
                       std::vector<uint8_t>& readBuf)
 {
+	static constexpr uint8_t NotAcknowledgementOnWrite = 0x83;
     // Open the i2c device, for low-level combined data write/read
     int i2cDev = ::open(i2cBus.c_str(), O_RDWR | O_CLOEXEC);
     if (i2cDev < 0)
@@ -612,7 +613,7 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
     {
         log<level::ERR>("I2C WR Failed!",
                         phosphor::logging::entry("RET=%d", ret));
-        return ipmi::ccUnspecifiedError;
+         return NotAcknowledgementOnWrite;
     }
     if (readCount)
     {
