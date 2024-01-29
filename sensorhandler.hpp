@@ -328,7 +328,7 @@ struct SensorDataFullRecordBody
     uint8_t normal_max;
     uint8_t normal_min;
     uint8_t sensor_max;
-    uint8_t sensor_min;
+    int8_t sensor_min;
     uint8_t upper_nonrecoverable_threshold;
     uint8_t upper_critical_threshold;
     uint8_t upper_noncritical_threshold;
