@@ -1447,6 +1447,11 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
 
     if (paramSelector == 0)
     {
+	
+	if (configData.size() != 0)
+         {
+             return ipmi::responseReqDataLenInvalid();
+         }
         // attempt to set the 'set in progress' value (in parameter #0)
         // when not in the set complete state.
         if ((transferStatus != setComplete) && (data1 == setInProgress))
