@@ -2102,10 +2102,17 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
     {
         uint2_t setInProgressFlag;
         uint6_t rsvd;
+         constexpr uint8_t setInProgressMask = 0x02;  
+        
         if (data.unpack(setInProgressFlag, rsvd) != 0 || !data.fullyUnpacked())
         {
             return ipmi::responseReqDataLenInvalid();
         }
+ 
+        if (setInProgressFlag > setInProgressMask)
+         {
+             return ipmi::responseInvalidFieldRequest();
+         }
         if (rsvd)
         {
             return ipmi::responseInvalidFieldRequest();
