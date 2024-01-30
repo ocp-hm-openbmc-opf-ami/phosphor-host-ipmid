@@ -122,19 +122,18 @@ ipmi::RspType<> ipmiWarmReset()
 
     // Status code.
     return ipmi::responseSuccess();
-
 }
 
-    void register_netfn_global_functions()
-    {
-        // Cold Reset
-        ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnApp,
-                              ipmi::app::cmdColdReset, ipmi::Privilege::Admin,
-                              ipmiColdReset);
+void register_netfn_global_functions()
+{
+    // Cold Reset
+    ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnApp,
+                          ipmi::app::cmdColdReset, ipmi::Privilege::Admin,
+                          ipmiColdReset);
 
-	// Warm Reset
-        ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnApp,
+    // Warm Reset
+    ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnApp,
                           ipmi::app::cmdWarmReset, ipmi::Privilege::Admin,
                           ipmiWarmReset);
-        return;
-    }
+    return;
+}

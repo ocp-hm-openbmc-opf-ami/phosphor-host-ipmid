@@ -26,7 +26,6 @@ using namespace phosphor::logging;
 
 namespace ipmi
 {
-
 /** @brief implements the set channel access command
  *  @ param ctx - context pointer
  *  @ param channel - channel number

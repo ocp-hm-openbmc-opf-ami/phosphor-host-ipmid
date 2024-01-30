@@ -1,3 +1,1 @@
-[Unit]
-Description=IPMI service collection
-AllowIsolate=no
+[Unit] Description = IPMI service collection AllowIsolate = no

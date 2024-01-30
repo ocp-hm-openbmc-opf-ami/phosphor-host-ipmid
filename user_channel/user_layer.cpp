@@ -26,7 +26,6 @@ ipmi::PasswdMgr passwdMgr;
 
 namespace ipmi
 {
-
 Cc ipmiUserInit()
 {
     getUserAccessObject();

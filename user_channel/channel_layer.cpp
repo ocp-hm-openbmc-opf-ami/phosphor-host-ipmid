@@ -23,7 +23,6 @@
 
 namespace ipmi
 {
-
 bool doesDeviceExist(const uint8_t chNum)
 {
     // TODO: This is not the reliable way to find the device

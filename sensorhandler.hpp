@@ -111,7 +111,7 @@ namespace request
 // raw value for this call.
 inline bool get_count(void* req)
 {
-    return (bool)((uint64_t)(req) & 1);
+    return (bool)((uint64_t)(req)&1);
 }
 } // namespace request
 } // namespace get_sdr_info
@@ -121,7 +121,6 @@ inline bool get_count(void* req)
  */
 namespace get_sdr
 {
-
 struct GetSdrReq
 {
     uint8_t reservation_id_lsb;
@@ -134,7 +133,6 @@ struct GetSdrReq
 
 namespace request
 {
-
 inline uint16_t get_reservation_id(GetSdrReq* req)
 {
     return (req->reservation_id_lsb + (req->reservation_id_msb << 8));
@@ -157,7 +155,6 @@ struct GetSdrResp
 
 namespace response
 {
-
 inline void set_next_record_id(uint16_t next, GetSdrResp* resp)
 {
     resp->next_record_id_lsb = next & 0xff;
@@ -178,7 +175,6 @@ struct SensorDataRecordHeader
 
 namespace header
 {
-
 inline void set_record_id(int id, SensorDataRecordHeader* hdr)
 {
     hdr->record_id_lsb = (id & 0xFF);
@@ -232,7 +228,6 @@ struct SensorDataEntityRecordKey
 
 namespace key
 {
-
 static constexpr uint8_t listOrRangeBit = 7;
 static constexpr uint8_t linkedBit = 6;
 
@@ -420,7 +415,6 @@ struct SensorDataEntityRecordBody
 
 namespace body
 {
-
 inline void set_entity_instance_number(uint8_t n,
                                        SensorDataFullRecordBody* body)
 {
@@ -712,10 +706,8 @@ struct SensorDataEntityRecord
 
 namespace ipmi
 {
-
 namespace sensor
 {
-
 /**
  * @brief Map offset to the corresponding bit in the assertion byte.
  *
