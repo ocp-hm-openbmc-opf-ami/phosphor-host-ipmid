@@ -37,7 +37,6 @@
 
 namespace ipmi
 {
-
 using namespace phosphor::logging;
 
 static constexpr const char* channelAccessDefaultFilename =
@@ -156,7 +155,7 @@ std::string ChannelConfig::getChannelName(const uint8_t chNum)
     {
         log<level::ERR>("Invalid channel number.",
                         entry("CHANNEL_ID=%d", chNum));
-        throw std::invalid_argument("Invalid channel number");
+        return std::string();
     }
 
     return channelData[chNum].chName;
@@ -350,12 +349,12 @@ ChannelConfig::ChannelConfig() : bus(ipmid_get_sd_bus_connection())
                     dBusPropertiesInterface) +
                 sdbusplus::bus::match::rules::argN(0, networkChConfigIntfName),
             [&](sdbusplus::message_t& msg) {
-            DbusChObjProperties props;
-            std::string iface;
-            std::string path = msg.get_path();
-            msg.read(iface, props);
-            processChAccessPropChange(path, props);
-        });
+                DbusChObjProperties props;
+                std::string iface;
+                std::string path = msg.get_path();
+                msg.read(iface, props);
+                processChAccessPropChange(path, props);
+            });
         signalHndlrObjectState = true;
 
         chInterfaceAddedSignal = std::make_unique<sdbusplus::bus::match_t>(

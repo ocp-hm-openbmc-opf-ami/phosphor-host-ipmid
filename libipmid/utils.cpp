@@ -19,13 +19,11 @@
 
 namespace ipmi
 {
-
 using namespace phosphor::logging;
 using namespace sdbusplus::error::xyz::openbmc_project::common;
 
 namespace network
 {
-
 /** @brief checks if the given ip is Link Local Ip or not.
  *  @param[in] ipaddress - IPAddress.
  */
@@ -78,10 +76,10 @@ DbusObjectInfo getDbusObject(sdbusplus::bus_t& bus,
     }
 
     // else search the match string in the object path
-    auto found = std::find_if(objectTree.begin(), objectTree.end(),
-                              [&match](const auto& object) {
-        return (object.first.find(match) != std::string::npos);
-    });
+    auto found = std::find_if(
+        objectTree.begin(), objectTree.end(), [&match](const auto& object) {
+            return (object.first.find(match) != std::string::npos);
+        });
 
     if (found == objectTree.end())
     {
@@ -322,7 +320,6 @@ ObjectTree getAllAncestors(sdbusplus::bus_t& bus, const std::string& path,
 
 namespace method_no_args
 {
-
 void callDbusMethod(sdbusplus::bus_t& bus, const std::string& service,
                     const std::string& objPath, const std::string& interface,
                     const std::string& method)
@@ -396,10 +393,10 @@ boost::system::error_code getDbusObject(Context::ptr ctx,
     }
 
     // else search the match string in the object path
-    auto found = std::find_if(objectTree.begin(), objectTree.end(),
-                              [&match](const auto& object) {
-        return (object.first.find(match) != std::string::npos);
-    });
+    auto found = std::find_if(
+        objectTree.begin(), objectTree.end(), [&match](const auto& object) {
+            return (object.first.find(match) != std::string::npos);
+        });
 
     if (found == objectTree.end())
     {
@@ -568,6 +565,7 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
                       std::vector<uint8_t> writeData,
                       std::vector<uint8_t>& readBuf)
 {
+    static constexpr uint8_t NotAcknowledgementOnWrite = 0x83;
     // Open the i2c device, for low-level combined data write/read
     int i2cDev = ::open(i2cBus.c_str(), O_RDWR | O_CLOEXEC);
     if (i2cDev < 0)
@@ -612,7 +610,7 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
     {
         log<level::ERR>("I2C WR Failed!",
                         phosphor::logging::entry("RET=%d", ret));
-        return ipmi::ccUnspecifiedError;
+        return NotAcknowledgementOnWrite;
     }
     if (readCount)
     {

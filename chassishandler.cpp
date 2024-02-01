@@ -130,7 +130,6 @@ namespace chassis
 {
 namespace internal
 {
-
 constexpr auto bootSettingsPath = "/xyz/openbmc_project/control/host0/boot";
 constexpr auto bootEnableIntf = "xyz.openbmc_project.Object.Enable";
 constexpr auto bootModeIntf = "xyz.openbmc_project.Control.Boot.Mode";
@@ -146,7 +145,6 @@ sdbusplus::bus_t dbus(ipmid_get_sd_bus_connection());
 
 namespace cache
 {
-
 std::unique_ptr<settings::Objects> objectsPtr = nullptr;
 
 settings::Objects& getObjects()
@@ -166,7 +164,6 @@ settings::Objects& getObjects()
 
 namespace poh
 {
-
 constexpr auto minutesPerCount = 60;
 
 } // namespace poh
@@ -923,7 +920,6 @@ int setNmiProperty(ipmi::Context::ptr& ctx, const bool value)
 
 namespace power_policy
 {
-
 using namespace sdbusplus::server::xyz::openbmc_project::control::power;
 using IpmiValue = uint8_t;
 using DbusValue = RestorePolicy::Policy;
@@ -1139,10 +1135,10 @@ ipmi::RspType<bool,    // Power is on
               uint2_t, // power restore policy
               bool,    // reserved
 
-              bool,    // AC failed
-              bool,    // last power down caused by a Power overload
-              bool,    // last power down caused by a power interlock
-              bool,    // last power down caused by power fault
+              bool, // AC failed
+              bool, // last power down caused by a Power overload
+              bool, // last power down caused by a power interlock
+              bool, // last power down caused by power fault
               bool, // last ‘Power is on’ state was entered via IPMI command
               uint3_t, // reserved
 
@@ -1154,14 +1150,14 @@ ipmi::RspType<bool,    // Power is on
               bool,    // Chassis Identify command and state info supported
               bool,    // reserved
 
-              bool,    // Power off button disabled
-              bool,    // Reset button disabled
-              bool,    // Diagnostic Interrupt button disabled
-              bool,    // Standby (sleep) button disabled
-              bool,    // Power off button disable allowed
-              bool,    // Reset button disable allowed
-              bool,    // Diagnostic Interrupt button disable allowed
-              bool     // Standby (sleep) button disable allowed
+              bool, // Power off button disabled
+              bool, // Reset button disabled
+              bool, // Diagnostic Interrupt button disabled
+              bool, // Standby (sleep) button disabled
+              bool, // Power off button disable allowed
+              bool, // Reset button disable allowed
+              bool, // Diagnostic Interrupt button disable allowed
+              bool  // Standby (sleep) button disable allowed
               >
     ipmiGetChassisStatus(ipmi::Context::ptr& ctx)
 {
@@ -1520,7 +1516,6 @@ ipmi::RspType<> ipmiChassisIdentify(std::optional<uint8_t> interval,
 
 namespace boot_options
 {
-
 using namespace sdbusplus::server::xyz::openbmc_project::control::boot;
 using IpmiValue = uint8_t;
 constexpr auto ipmiDefault = 0;
@@ -1836,7 +1831,7 @@ static uint8_t transferStatus = setComplete;
 static uint8_t bootFlagValidBitClr = 0;
 static uint5_t bootInitiatorAckData = 0x0;
 static bool cmosClear = false;
-uint8_t                   ParameterValid[16];
+uint8_t ParameterValid[16];
 
 /** @brief implements the Get Chassis system boot option
  *  @param ctx - context pointer
@@ -1872,11 +1867,12 @@ ipmi::RspType<ipmi::message::Payload>
     ipmi::message::Payload response;
     response.pack(version, uint4_t{});
     using namespace boot_options;
-    bool flagvalid ;
+    bool flagvalid;
 
     uint8_t parameter = static_cast<uint8_t>(bootOptionParameter);
-    uint8_t ParamByte =  parameter / 8;  // Calculate the index in ParameterValid array
-    uint8_t ParamBit = parameter % 8;   // Calculate the bit position in the index
+    uint8_t ParamByte = parameter /
+                        8; // Calculate the index in ParameterValid array
+    uint8_t ParamBit = parameter % 8; // Calculate the bit position in the index
 
     if (ParameterValid[ParamByte] & (1 << ParamBit))
     {
@@ -2035,7 +2031,8 @@ ipmi::RspType<ipmi::message::Payload>
 }
 
 ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
-                                             uint7_t parameterSelector, bool flagvalid,
+                                             uint7_t parameterSelector,
+                                             bool flagvalid,
                                              ipmi::message::Payload& data)
 {
     using namespace boot_options;
@@ -2044,13 +2041,14 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
 
     Parameter = static_cast<uint8_t>(parameterSelector & 0x7F);
 
-    ParamByte = Parameter/8; //to choose the index where the parameter valid bit is present
-    ParamBit = Parameter%8;  //to choose the parameter valid bit in the index
+    ParamByte =
+        Parameter /
+        8; // to choose the index where the parameter valid bit is present
+    ParamBit = Parameter % 8; // to choose the parameter valid bit in the index
 
-    if(data.fullyUnpacked())
+    if (data.fullyUnpacked())
     {
-
-        if (ParameterValid[ParamByte] & (1 << ParamBit) )
+        if (ParameterValid[ParamByte] & (1 << ParamBit))
         {
             /*if not req to unlock */
             if (0 != (flagvalid))
@@ -2065,17 +2063,16 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
             /* The valid bit for parameters 0 - 7  are SET/RESET to
              *  corresponding bits 0-7 in ParameterValid field
              */
-            ParameterValid[ParamByte] |= (1<<(ParamBit));
+            ParameterValid[ParamByte] |= (1 << (ParamBit));
         }
         else
         {
-            ParameterValid[ParamByte] &= ~(1<<(ParamBit));
+            ParameterValid[ParamByte] &= ~(1 << (ParamBit));
         }
         return ipmi::responseSuccess();
-
     }
 
-    if (ParameterValid[ParamByte] & (1 << ParamBit) )
+    if (ParameterValid[ParamByte] & (1 << ParamBit))
     {
         /*if not req to unlock */
         if (0 != (flagvalid))
@@ -2090,21 +2087,28 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
         /* The valid bit for parameters 0 - 7  are SET/RESET to
          *  corresponding bits 0-7 in ParameterValid field
          */
-        ParameterValid[ParamByte] |= (1<<(ParamBit));
+        ParameterValid[ParamByte] |= (1 << (ParamBit));
     }
     else
     {
-        ParameterValid[ParamByte] &= ~(1<<(ParamBit));
+        ParameterValid[ParamByte] &= ~(1 << (ParamBit));
     }
-     
+
     if (types::enum_cast<BootOptionParameter>(parameterSelector) ==
         BootOptionParameter::setInProgress)
     {
         uint2_t setInProgressFlag;
         uint6_t rsvd;
+        constexpr uint8_t setInProgressMask = 0x02;
+
         if (data.unpack(setInProgressFlag, rsvd) != 0 || !data.fullyUnpacked())
         {
             return ipmi::responseReqDataLenInvalid();
+        }
+
+        if (setInProgressFlag > setInProgressMask)
+        {
+            return ipmi::responseInvalidFieldRequest();
         }
         if (rsvd)
         {

@@ -339,11 +339,11 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
         }
         else
         {
-            auto found = std::find_if(acpi_state::dbusToIPMI.begin(),
-                                      acpi_state::dbusToIPMI.end(),
-                                      [&s](const auto& iter) {
-                return (static_cast<uint8_t>(iter.second) == s);
-            });
+            auto found = std::find_if(
+                acpi_state::dbusToIPMI.begin(), acpi_state::dbusToIPMI.end(),
+                [&s](const auto& iter) {
+                    return (static_cast<uint8_t>(iter.second) == s);
+                });
 
             value = found->first;
 
@@ -388,11 +388,11 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
         }
         else
         {
-            auto found = std::find_if(acpi_state::dbusToIPMI.begin(),
-                                      acpi_state::dbusToIPMI.end(),
-                                      [&s](const auto& iter) {
-                return (static_cast<uint8_t>(iter.second) == s);
-            });
+            auto found = std::find_if(
+                acpi_state::dbusToIPMI.begin(), acpi_state::dbusToIPMI.end(),
+                [&s](const auto& iter) {
+                    return (static_cast<uint8_t>(iter.second) == s);
+                });
 
             value = found->first;
 
@@ -1368,16 +1368,20 @@ ipmi::RspType<uint8_t,                // Parameter revision
         return ipmi::responseSuccess(paramRevision, std::nullopt, std::nullopt);
     }
 
-    if (paramSelector == 0)
-    {
-        return ipmi::responseSuccess(paramRevision, transferStatus,
-                                     std::nullopt);
-    }
-
     if (BlockSelector != 0) // 00h if parameter does not require a block number
     {
         return ipmi::responseParmNotSupported();
     }
+
+    if (paramSelector == 0)
+    {
+        if (setSelector != 0)
+            return ipmi::responseInvalidFieldRequest();
+
+        return ipmi::responseSuccess(paramRevision, transferStatus,
+                                     std::nullopt);
+    }
+
 
     if (sysInfoParamStore == nullptr)
     {
@@ -1389,12 +1393,12 @@ ipmi::RspType<uint8_t,                // Parameter revision
     // Parameters other than Set In Progress are assumed to be strings.
     std::tuple<bool, std::string> ret =
         sysInfoParamStore->lookup(paramSelector);
+    std::string& paramString = std::get<1>(ret);
     bool found = std::get<0>(ret);
     if (!found)
     {
-        return ipmi::responseSensorInvalid();
+        paramString = "";
     }
-    std::string& paramString = std::get<1>(ret);
     std::vector<uint8_t> configData;
     size_t count = 0;
     if (setSelector == 0)
@@ -1443,6 +1447,10 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
 
     if (paramSelector == 0)
     {
+        if (configData.size() != 0)
+        {
+            return ipmi::responseReqDataLenInvalid();
+        }
         // attempt to set the 'set in progress' value (in parameter #0)
         // when not in the set complete state.
         if ((transferStatus != setComplete) && (data1 == setInProgress))

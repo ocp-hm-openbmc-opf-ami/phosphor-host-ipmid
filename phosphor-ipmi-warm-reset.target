@@ -1,0 +1,1 @@
+[Unit] Description = IPMI service collection AllowIsolate = no
