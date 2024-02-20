@@ -66,6 +66,9 @@ using Activation =
     sdbusplus::server::xyz::openbmc_project::software::Activation;
 using BMC = sdbusplus::server::xyz::openbmc_project::state::BMC;
 namespace fs = std::filesystem;
+struct GlobalEncoding{
+        uint8_t globalencoding;
+}globalEncoding;
 
 #ifdef ENABLE_I2C_WHITELIST_CHECK
 typedef struct
@@ -1403,7 +1406,8 @@ ipmi::RspType<uint8_t,                // Parameter revision
     size_t count = 0;
     if (setSelector == 0)
     {                               // First chunk has only 14 bytes.
-        configData.emplace_back(0); // encoding
+       // configData.emplace_back(0); // encoding
+        configData.emplace_back(globalEncoding.globalencoding);
         configData.emplace_back(paramString.length()); // string length
         count = std::min(paramString.length(), smallChunkSize);
         configData.resize(count + configDataOverhead);
@@ -1504,6 +1508,7 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
     if (setSelector == 0) // First chunk has only 14 bytes.
     {
         uint8_t encoding = configData.at(0);
+	globalEncoding.globalencoding = encoding;
         if (encoding > maxValidEncodingData)
         {
             return ipmi::responseInvalidFieldRequest();
