@@ -102,6 +102,8 @@ static constexpr const char* userGrpProperty = "UserGroups";
 static constexpr const char* userEnabledProperty = "UserEnabled";
 //OEM Privilege
 static constexpr const char* mediaGroup = "media";
+//SNMP Trap V3
+static constexpr const char* snmpGroup = "snmp";
 
 static std::array<std::string, (PRIVILEGE_OEM + 1)> ipmiPrivIndex = {
     "priv-reserved", // PRIVILEGE_RESERVED - 0
@@ -1066,6 +1068,11 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
             auto mediaGrpEntry = find(groups.begin(), groups.end(), mediaGroup);
             if (mediaGrpEntry != groups.end()) {
                 groups.erase(mediaGrpEntry);
+            }
+            //find snmp group and remove it, by default user privilege user should not have snmp privilege
+            auto snmpGrpEntry = find(groups.begin(), groups.end(), snmpGroup);
+            if (snmpGrpEntry != groups.end()) {
+                groups.erase(snmpGrpEntry);
             } 
             method.append(userName.c_str(), groups,
                           ipmiPrivIndex[PRIVILEGE_USER], false);
