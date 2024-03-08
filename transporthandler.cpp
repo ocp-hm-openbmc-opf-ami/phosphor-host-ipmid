@@ -941,6 +941,62 @@ uint8_t getGARPIntervalProperty(sdbusplus::bus::bus& bus, const ChannelParams& p
     return (garpInterval/500);
 }
 
+
+/** @brief Set IPv4 Header Parameters on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] timetoLive    - Time to Live field in IP Header
+ *  @param[in] flags         - Flags field in IP Header
+ *  @param[in] typeOfService - Type Of Service and Precedence
+ */
+void setIPv4HeaderParam(sdbusplus::bus::bus& bus, const ChannelParams& params,
+			uint8_t timeToLive, uint8_t flags, uint8_t typeOfService)
+{
+
+    const std::string service = std::string(CHANNEL_INTF_SERVICE) + "." + params.ifname;
+    const std::string logicalPath= std::string(SESSION_ROOT_PATH) + "/" + params.ifname + "/0";
+
+    auto newreq = bus.new_method_call(service.c_str(), logicalPath.c_str(),
+                                      INTF_IPHEADER, "SetIPv4Header");
+
+    newreq.append(timeToLive,flags,typeOfService);
+    bus.call_noreply(newreq);
+}
+
+/** @brief Set IPv6 Header Parameters on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] trafficClass  - Traffic Class field in IPv6 Header
+ *  @param[in] hopLimit      - Hop Limit field in IPv6 Header
+ */
+void setIPv6HeaderParam(sdbusplus::bus::bus& bus, const ChannelParams& params,
+			uint8_t trafficClass, uint8_t hopLimit)
+{
+
+    const std::string service = std::string(CHANNEL_INTF_SERVICE) + "." + params.ifname;
+    const std::string logicalPath= std::string(SESSION_ROOT_PATH) + "/" + params.ifname + "/0";
+
+    auto newreq = bus.new_method_call(service.c_str(), logicalPath.c_str(),
+                                      INTF_IPHEADER, "SetIPv6Header");
+
+    newreq.append(trafficClass,hopLimit);
+    bus.call_noreply(newreq);
+}
+
+uint8_t getIPHeaderProperty(sdbusplus::bus::bus& bus, const ChannelParams& params,
+				const char* Property)
+{
+    const std::string service = std::string(CHANNEL_INTF_SERVICE) + "." + params.ifname;
+    const std::string logicalPath= std::string(SESSION_ROOT_PATH) + "/" + params.ifname + "/0";
+
+    uint8_t propertyValue = std::get<uint8_t>(getDbusProperty(
+        bus, service.c_str(), logicalPath.c_str(), INTF_IPHEADER, Property));
+
+    return (propertyValue);
+}
+
 RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     uint8_t parameter, message::Payload& req)
 {
@@ -1052,6 +1108,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseInvalidFieldRequest();
             }
+
             switch (static_cast<IPSrc>(static_cast<uint8_t>(flag)))
             {
                 case IPSrc::DHCP:
@@ -1094,6 +1151,36 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             channelCall<reconfigureIfAddr4>(channel, std::nullopt, pfx);
             return responseSuccess();
         }
+        case LanParam::IPv4HeaderParam:
+        {
+            uint8_t TimeToLive;
+            uint8_t Flag;
+            uint8_t TypeOfService;
+
+            if ((req.unpack(TimeToLive,Flag,TypeOfService) != 0) || (!req.fullyUnpacked()))
+            {
+                return responseReqDataLenInvalid();
+            }
+
+            if(TimeToLive < 1) /*Zero value is not allowed for Time To Live*/
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            if(Flag & 0x9F) /*Flags use only 6th to 5th bits in field, rest bits are reserved*/
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            if(TypeOfService & 0x01) /*Type of service use only 7th to 1st bits in field, rest bits are reserved*/
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            channelCall<setIPv4HeaderParam>(channel,TimeToLive,Flag,TypeOfService);
+            return responseSuccess();
+        }
+
         case LanParam::BMCARPControl:
         {
             uint8_t enables;
@@ -1260,6 +1347,40 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     return responseSuccess();
             }
             return response(ccParamNotSupported);
+        }
+        case LanParam::IPv6HeaderStaticTrafficClass:
+        {
+            uint8_t TrafficClass;
+            uint8_t HopLimit;
+
+            if ((req.unpack(TrafficClass) != 0) || (!req.fullyUnpacked()))
+            {
+                return responseReqDataLenInvalid();
+            }
+
+            /*Check the reserved bit as per RFC 2474 6th bit and 7th bit are reserved*/
+            if(TrafficClass & 0xC0)
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            HopLimit=channelCall<getIPHeaderProperty>(channel,"HopLimit");
+            channelCall<setIPv6HeaderParam>(channel,TrafficClass,HopLimit);
+            return responseSuccess();
+        }
+        case LanParam::IPv6HeaderStaticHopLimit:
+        {
+            uint8_t TrafficClass;
+            uint8_t HopLimit;
+
+            if ((req.unpack(HopLimit) != 0) || (!req.fullyUnpacked()))
+            {
+                return responseReqDataLenInvalid();
+            }
+
+            TrafficClass=channelCall<getIPHeaderProperty>(channel,"TrafficClass");
+            channelCall<setIPv6HeaderParam>(channel,TrafficClass,HopLimit);
+            return responseSuccess();
         }
         case LanParam::IPv6Status:
         {
@@ -1603,6 +1724,20 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             ret.pack(stdplus::raw::asView<char>(netmask));
             return responseSuccess(std::move(ret));
         }
+        case LanParam::IPv4HeaderParam:
+        {
+            uint8_t timeToLive;
+            uint8_t flags;
+            uint8_t typeOfService;
+
+            timeToLive=channelCall<getIPHeaderProperty>(channel,"TimeToLive");
+            flags=channelCall<getIPHeaderProperty>(channel,"Flags");
+            typeOfService=channelCall<getIPHeaderProperty>(channel,"TypeOfService");
+            ret.pack(timeToLive);
+            ret.pack(flags);
+            ret.pack(typeOfService);
+            return responseSuccess(std::move(ret));
+        }
         case LanParam::BMCARPControl:
         {
             uint8_t arp = channelCall<getARPProperty>(channel);
@@ -1703,6 +1838,22 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             }
 
             ret.pack(enable);
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6HeaderStaticTrafficClass:
+        {
+            uint8_t TrafficClass;
+
+            TrafficClass=channelCall<getIPHeaderProperty>(channel,"TrafficClass");
+            ret.pack(TrafficClass);
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6HeaderStaticHopLimit:
+        {
+            uint8_t HopLimit;
+
+            HopLimit=channelCall<getIPHeaderProperty>(channel,"HopLimit");
+            ret.pack(HopLimit);
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6Status:
