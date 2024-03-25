@@ -71,7 +71,7 @@ bool ifnameInPath(std::string_view ifname, std::string_view path)
     constexpr auto rs = PATH_ROOT.size() + 1; // ROOT + separator
     const auto is = rs + ifname.size();       // ROOT + sep + ifname
     return path.size() > rs && path.substr(rs).starts_with(ifname) &&
-           (path.size() == is || path[is] == '/');
+           (path.size() == is || path[is] == '/' || path[is] == '_');
 }
 
 std::optional<ChannelParams> maybeGetChannelParams(sdbusplus::bus_t& bus,
@@ -1597,7 +1597,8 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             {
                 vlan = lastDisabledVlan[channel];
             }
-            ret.pack(vlan);
+            ret.pack(static_cast<uint8_t>(vlan & 0x00FF));
+            ret.pack(static_cast<uint8_t>((vlan & 0xFF00) >> 8));
             return responseSuccess(std::move(ret));
         }
         case LanParam::CiphersuiteSupport:
