@@ -27,7 +27,7 @@ static constexpr auto gDCMISensorsConfig =
     "/usr/share/ipmi-providers/dcmi_sensors.json";
 static constexpr auto ethernetIntf =
     "xyz.openbmc_project.Network.EthernetInterface";
-static constexpr auto ethernetDefaultChannelNum = 0x1;
+static constexpr auto ethernetDefaultChannelNum = 0x03;
 static constexpr auto networkRoot = "/xyz/openbmc_project/network";
 static constexpr auto dhcpObj = "/xyz/openbmc_project/network/dhcp";
 static constexpr auto dhcpIntf =
