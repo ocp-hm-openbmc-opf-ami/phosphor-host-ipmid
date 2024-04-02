@@ -2032,7 +2032,9 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
 
 	}
         case SolConfParam::Vbitrate:
+            return response(ipmiCCParamNotSupported);
         case SolConfParam::Channel:
+            return response(ipmiCCWriteReadParameter);
         default:
             return response(ipmiCCParamNotSupported);
     }
