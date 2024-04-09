@@ -923,7 +923,15 @@ ipmi::RspType<> setDCMIConfParams(ipmi::Context::ptr& ctx, uint8_t parameter,
                 return ipmi::responseReqDataLenInvalid();
             }
             // Systemd-networkd doesn't support Random Back off
-            if (reserved1 || randBackOff)
+            if (randBackOff)
+            {
+                return ipmi::responseCommandDisabled();
+            }
+            if (option12 != dcmi::option12Mask)
+            {
+                return ipmi::responseCommandNotAvailable();
+            }
+            if (reserved1)
             {
                 return ipmi::responseInvalidFieldRequest();
             }
