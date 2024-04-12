@@ -48,7 +48,7 @@ constexpr auto sensorValueIntf = "xyz.openbmc_project.Sensor.Value";
 constexpr auto sensorValueProp = "Value";
 constexpr uint8_t configParameterRevision = 1;
 constexpr auto option12Mask = 0x01;
-constexpr auto activateDhcpReply = 0x00;
+constexpr uint8_t activateDhcpReply = 0x00;
 constexpr uint8_t dhcpTiming1 = 0x04;  // 4 sec
 constexpr uint16_t dhcpTiming2 = 0x78; // 120 sec
 constexpr uint16_t dhcpTiming3 = 0x40; // 60 sec
@@ -943,7 +943,7 @@ ipmi::RspType<> setDCMIConfParams(ipmi::Context::ptr& ctx, uint8_t parameter,
         case dcmi::DCMIConfigParameters::DHCPTiming2:
         case dcmi::DCMIConfigParameters::DHCPTiming3:
         default:
-            return ipmi::responseInvalidFieldRequest();
+            return ipmi::responseInvalidCommand();
     }
     return ipmi::responseSuccess();
 }
