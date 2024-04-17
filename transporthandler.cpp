@@ -428,6 +428,9 @@ template <int family>
 std::optional<IfNeigh<family>> getStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params) {
     ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
     auto routerAddr = getStaticRtrAddr<AF_INET6>(bus, params);
+    if(routerAddr.empty()){
+        return std::nullopt;
+    }
     auto addr = stdplus::fromStr<stdplus::In6Addr>(routerAddr);
     return findStaticNeighbor<AF_INET6>(bus, params, addr, neighbors);
 }
@@ -444,6 +447,31 @@ void setIPv6StaticRtr(sdbusplus::bus_t& bus, const ChannelParams& params,
     setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,
                     "IPv6EnableStaticRtr", enabled);
 }
+
+/** @brief Deletes Static Router Neighbor object
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ */
+template <int family>
+void DeleteStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
+    if (oldStaticAddr.empty())
+    {
+        return;
+    }
+
+    ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
+    auto neighbor =
+        findStaticNeighbor<family>(bus, params, stdplus::fromStr<stdplus::In6Addr>(oldStaticAddr), neighbors);
+
+    if (neighbor)
+    {
+        deleteObjectIfExists(bus, params.service, neighbor->path);
+    }
+}
+
 
 /** @brief Deconfigures the IPv6 address info configured for the interface
  *
@@ -1312,7 +1340,11 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
 
             bool enableRA = control[IPv6RouterControlFlag::Dynamic];
             channelCall<setEthProp<bool>>(channel, "IPv6AcceptRA", enableRA);
-            channelCall<setEthProp<bool>>(channel, "DHCP6", enableRA);
+            
+            bool staticRtr = channelCall<getEthProp<bool>>(channel, "IPv6EnableStaticRtr");
+            if(staticRtr && control[IPv6RouterControlFlag::Dynamic]){
+                channelCall<DeleteStaticRtrNeighbor<AF_INET6>>(channel);
+            }
 
             bool enableStaticRtr = IPv6RouterControlFlag::StaticControl;
             channelCall<setIPv6StaticRtr>(channel, enableStaticRtr);
@@ -1702,7 +1734,14 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             {
                 routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel);
             }
-            ret.pack(stdplus::raw::asView<char>(routerAddr));
+
+            if(!routerAddr.empty()){
+                ret.pack(stdplus::raw::asView<char>(stdplus::fromStr<stdplus::In6Addr>(routerAddr)));
+            }
+            else{
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+            }
+
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6StaticRouter1MAC:

@@ -463,7 +463,6 @@ void createNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params,
     stdplus::ToStrHandle<stdplus::ToStr<stdplus::EtherAddr>> macToStr;
     stdplus::ToStrHandle<stdplus::ToStr<typename AddrFamily<family>::addr>>
         addrToStr;
-    newreq.append(addrToStr(address), macToStr(mac));
     newreq.append(addrToStr(address), macToStr(mac), prefixLength);
     bus.call_noreply(newreq);
 }
