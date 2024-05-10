@@ -1291,11 +1291,17 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 {
                     return responseParmOutOfRange();
                 }
-                if (channelCall<getEthProp<bool>>(channel, "DHCP6")) {
+                bool dhcp = channelCall<getEthProp<bool>>(channel, "DHCP6");
+                if (dhcp) {
                     channelCall<setEthProp<bool>>(channel, "DHCP6", false);
                 }
-                channelCall<reconfigureIfAddr6>(channel, set, ip, prefix);
-            }
+                try {
+                    channelCall<reconfigureIfAddr6>(channel, set, ip, prefix);
+                } catch (const std::exception& e) {
+                    channelCall<setEthProp<bool>>(channel, "DHCP6", dhcp);
+                    return responseInvalidFieldRequest();
+                }
+	    }
             else
             {
                 channelCall<deconfigureIfAddr6>(channel, set);
