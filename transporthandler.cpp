@@ -1955,7 +1955,7 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
 
             uint8_t privilege = static_cast<uint8_t>(privilegeBits);
             if (privilege < static_cast<uint8_t>(Privilege::User) ||
-                privilege > static_cast<uint8_t>(Privilege::Oem))
+                privilege > static_cast<uint8_t>(Privilege::Admin))
             {
                 return ipmi::responseInvalidFieldRequest();
             }
