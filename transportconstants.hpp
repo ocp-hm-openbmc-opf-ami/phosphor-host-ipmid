@@ -82,6 +82,7 @@ enum class SetStatus : uint8_t
     Complete = 0,
     InProgress = 1,
     Commit = 2,
+    Reserved = 3,
 };
 
 /** @brief IPMI Family Suport Bits */
