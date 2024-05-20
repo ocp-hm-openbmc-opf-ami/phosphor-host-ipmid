@@ -16,6 +16,7 @@
 
 #pragma once
 #include <cstdint>
+#include <ipmid/api.hpp>
 
 namespace ipmi
 {
@@ -35,11 +36,9 @@ enum ipmi_netfn_user_cmds
 /**
  * @enum IPMI set password return codes (refer spec sec 22.30)
  */
-enum class IPMISetPasswordReturnCodes
-{
-    ipmiCCPasswdFailMismatch = 0x80,
-    ipmiCCPasswdFailWrongSize = 0x81,
-};
+
+static constexpr Cc ipmiCCPasswdFailMismatch = 0x80;
+static constexpr Cc ipmiCCPasswdFailWrongSize = 0x81;
 
 static constexpr uint8_t userIdEnabledViaSetPassword = 0x1;
 static constexpr uint8_t userIdDisabledViaSetPassword = 0x2;
