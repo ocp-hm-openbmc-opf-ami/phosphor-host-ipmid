@@ -63,6 +63,7 @@ const std::unordered_set<IP::AddressOrigin> originsV4 = {
 };
 
 static constexpr uint8_t oemCmdStart = 192;
+bool IsDHCP = false;
 
 // Checks if the ifname is part of the networkd path
 // This assumes the path came from the network subtree PATH_ROOT
@@ -309,9 +310,15 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
     {
         fallbackPrefix = ifaddr->prefix;
         deleteObjectIfExists(bus, params.service, ifaddr->path);
+        if (!IsDHCP)
+        {
+            createIfAddr<AF_INET>(bus, params, address.value_or(ifaddr->address), prefix.value_or(fallbackPrefix));
+        }
     }
-
-    createIfAddr<AF_INET>(bus, params, address.value_or(ifaddr->address), prefix.value_or(fallbackPrefix));
+    else if (address)
+    {
+        createIfAddr<AF_INET>(bus, params, address.value_or(ifaddr->address), prefix.value_or(fallbackPrefix));
+    }
 }
 
 template <int family>
@@ -1051,11 +1058,14 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     // management. Modifying IPv6 state is done using
                     // a completely different Set LAN Configuration
                     // subcommand.
+                    IsDHCP = true;
+                    channelCall<reconfigureIfAddr4>(channel, std::nullopt, std::nullopt);
                     channelCall<setEthProp<bool>>(channel, "DHCP4", true);
                     return responseSuccess();
                 case IPSrc::Unspecified:
                     return responseInvalidFieldRequest();
                 case IPSrc::Static:
+                    IsDHCP = false;
                     channelCall<reconfigureIfAddr4>(channel, std::nullopt, std::nullopt);
                     channelCall<setEthProp<bool>>(channel, "DHCP4", false);
                     return responseSuccess();
@@ -1291,10 +1301,16 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 {
                     return responseParmOutOfRange();
                 }
-                if (channelCall<getEthProp<bool>>(channel, "DHCP6")) {
+                bool dhcp = channelCall<getEthProp<bool>>(channel, "DHCP6");
+                if (dhcp) {
                     channelCall<setEthProp<bool>>(channel, "DHCP6", false);
                 }
-                channelCall<reconfigureIfAddr6>(channel, set, ip, prefix);
+                try {
+                    channelCall<reconfigureIfAddr6>(channel, set, ip, prefix);
+                } catch (const std::exception& e) {
+                    channelCall<setEthProp<bool>>(channel, "DHCP6", dhcp);
+                    return responseInvalidFieldRequest();
+                }
             }
             else
             {
