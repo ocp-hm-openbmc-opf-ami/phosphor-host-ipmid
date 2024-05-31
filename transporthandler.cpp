@@ -1940,7 +1940,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
                     prefixLength = neighbor->prefixLength;
                 }
             }
-            ret.pack(UINT8_C(prefixLength));
+            ret.pack(uint8_t(prefixLength));
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6StaticRouter1PrefixValue:
