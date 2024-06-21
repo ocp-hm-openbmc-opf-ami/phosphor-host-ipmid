@@ -779,7 +779,7 @@ static void unpackFinal(message::Payload& req)
 {
     if (!req.fullyUnpacked())
     {
-        throw ccReqDataTruncated;
+	throw ccReqDataLenInvalid;
     }
 }
 
@@ -1410,7 +1410,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             }
             if (set >= MAX_IPV6_STATIC_ADDRESSES)
             {
-                return responseParmOutOfRange();
+            	return responseInvalidFieldRequest();
             }
 
             if (enabled)
