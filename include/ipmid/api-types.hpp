@@ -391,7 +391,6 @@ constexpr Cc ccInsufficientPrivilege = 0xD4;
 constexpr Cc ccCommandNotAvailable = 0xD5;
 constexpr Cc ccCommandDisabled = 0xD6;
 constexpr Cc ccUnspecifiedError = 0xFF;
-
 /* ipmi often has two return types:
  * 1. Failure: CC is non-zero; no trailing data
  * 2. Success: CC is zero; trailing data (usually a fixed type)

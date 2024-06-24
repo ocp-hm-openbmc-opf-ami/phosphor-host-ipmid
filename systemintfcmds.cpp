@@ -7,12 +7,36 @@
 
 #include <ipmid-host/cmd.hpp>
 #include <ipmid/api.hpp>
+#include <ipmid/utils.hpp>
 #include <nlohmann/json.hpp>
+#include <sdbusplus/bus.hpp>
 
+#include <bitset>
 #include <cstring>
 #include <fstream>
-
 void register_netfn_app_functions() __attribute__((constructor));
+
+/*D-bus details for BMC Global enable */
+static constexpr const char* settingService = "xyz.openbmc_project.Settings";
+static constexpr const char* globalEnblObjpath =
+    "/xyz/openbmc_project/control/globalenables";
+static constexpr const char* globalEnblInterface =
+    "xyz.openbmc_project.Control.BMC.Globalenables";
+
+static bool enable = true;
+static bool disable = false;
+
+enum class BMCGlobalEnable : uint8_t
+{
+    recvMsgQueueInterrupt = 0,
+    eventMsgFullIntr = 1,
+    eventMsgBuf = 2,
+    sel = 3,
+    reserved = 4,
+    oem0 = 5,
+    oem1 = 6,
+    oem2 = 7
+};
 
 using namespace sdbusplus::server::xyz::openbmc_project::control;
 
@@ -89,26 +113,90 @@ ipmi::RspType<uint8_t> ipmiAppGetMessageFlags()
     return ipmi::responseSuccess(setEventMsgBufferNotSupported);
 }
 
-ipmi::RspType<bool,    // Receive Message Queue Interrupt Enabled
-              bool,    // Event Message Buffer Full Interrupt Enabled
-              bool,    // Event Message Buffer Enabled
-              bool,    // System Event Logging Enabled
-              uint1_t, // Reserved
-              bool,    // OEM 0 enabled
-              bool,    // OEM 1 enabled
-              bool     // OEM 2 enabled
-              >
-    ipmiAppGetBMCGlobalEnable()
+ipmi::RspType<uint8_t> ipmiAppGetBMCGlobalEnable()
 {
-    return ipmi::responseSuccess(true, false, false, true, 0, false, false,
-                                 false);
+    uint8_t globalEnables = 0;
+    try
+    {
+        sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
+
+        ipmi::Value propValue =
+            ipmi::getDbusProperty(bus, settingService, globalEnblObjpath,
+                                  globalEnblInterface, "RecvMsgQueueInterrupt");
+        if (std::holds_alternative<bool>(propValue) &&
+            std::get<bool>(propValue))
+        {
+            globalEnables |= (1 << static_cast<uint8_t>(
+                                  BMCGlobalEnable::recvMsgQueueInterrupt));
+        }
+
+        propValue =
+            ipmi::getDbusProperty(bus, settingService, globalEnblObjpath,
+                                  globalEnblInterface, "EventmsgFullintr");
+        if (std::holds_alternative<bool>(propValue) &&
+            std::get<bool>(propValue))
+        {
+            globalEnables |=
+                (1 << static_cast<uint8_t>(BMCGlobalEnable::eventMsgFullIntr));
+        }
+
+        propValue = ipmi::getDbusProperty(bus, settingService,
+                                          globalEnblObjpath,
+                                          globalEnblInterface, "EventmsgBuf");
+        if (std::holds_alternative<bool>(propValue) &&
+            std::get<bool>(propValue))
+        {
+            globalEnables |=
+                (1 << static_cast<uint8_t>(BMCGlobalEnable::eventMsgBuf));
+        }
+
+        propValue = ipmi::getDbusProperty(
+            bus, settingService, globalEnblObjpath, globalEnblInterface, "Sel");
+        if (std::holds_alternative<bool>(propValue) &&
+            std::get<bool>(propValue))
+        {
+            globalEnables |= (1 << static_cast<uint8_t>(BMCGlobalEnable::sel));
+        }
+
+        propValue = ipmi::getDbusProperty(bus, settingService,
+                                          globalEnblObjpath,
+                                          globalEnblInterface, "OEM0");
+        if (std::holds_alternative<bool>(propValue) &&
+            std::get<bool>(propValue))
+        {
+            globalEnables |= (1 << static_cast<uint8_t>(BMCGlobalEnable::oem0));
+        }
+
+        propValue = ipmi::getDbusProperty(bus, settingService,
+                                          globalEnblObjpath,
+                                          globalEnblInterface, "OEM1");
+        if (std::holds_alternative<bool>(propValue) &&
+            std::get<bool>(propValue))
+        {
+            globalEnables |= (1 << static_cast<uint8_t>(BMCGlobalEnable::oem1));
+        }
+
+        propValue = ipmi::getDbusProperty(bus, settingService,
+                                          globalEnblObjpath,
+                                          globalEnblInterface, "OEM2");
+        if (std::holds_alternative<bool>(propValue) &&
+            std::get<bool>(propValue))
+        {
+            globalEnables |= (1 << static_cast<uint8_t>(BMCGlobalEnable::oem2));
+        }
+    }
+    catch (const sdbusplus::exception::SdBusError& e)
+    {
+        phosphor::logging::log<phosphor::logging::level::ERR>(
+            "Failed to get BMC Global Enables",
+            phosphor::logging::entry("ERROR=%s", e.what()));
+        return ipmi::responseUnspecifiedError();
+    }
+    return ipmi::responseSuccess(globalEnables);
 }
 
-ipmi::RspType<> ipmiAppSetBMCGlobalEnable(
-    ipmi::Context::ptr ctx, bool receiveMessageQueueInterruptEnabled,
-    bool eventMessageBufferFullInterruptEnabled, bool eventMessageBufferEnabled,
-    bool systemEventLogEnable, uint1_t reserved, bool OEM0Enabled,
-    bool OEM1Enabled, bool OEM2Enabled)
+ipmi::RspType<> ipmiAppSetBMCGlobalEnable(ipmi::Context::ptr ctx,
+                                          uint8_t globalEnables)
 {
     ipmi::ChannelInfo chInfo;
 
@@ -128,15 +216,60 @@ ipmi::RspType<> ipmiAppSetBMCGlobalEnable(
         return ipmi::responseCommandNotAvailable();
     }
 
-    // Recv Message Queue and SEL are enabled by default.
-    // Event Message buffer are disabled by default (not supported).
-    // Any request that try to change the mask will be rejected
-    if (!receiveMessageQueueInterruptEnabled || !systemEventLogEnable ||
-        eventMessageBufferFullInterruptEnabled || eventMessageBufferEnabled ||
-        OEM0Enabled || OEM1Enabled || OEM2Enabled || reserved)
+    if (globalEnables & (1 << static_cast<uint8_t>(BMCGlobalEnable::reserved)))
     {
         return ipmi::responseInvalidFieldRequest();
     }
+
+    sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
+
+    // Process each global enable bit and set the corresponding D-Bus property
+    ipmi::setDbusProperty(bus, settingService, globalEnblObjpath,
+                          globalEnblInterface, "RecvMsgQueueInterrupt",
+                          globalEnables &
+                                  (1 << static_cast<uint8_t>(
+                                       BMCGlobalEnable::recvMsgQueueInterrupt))
+                              ? enable
+                              : disable);
+
+    ipmi::setDbusProperty(
+        bus, settingService, globalEnblObjpath, globalEnblInterface,
+        "EventmsgFullintr",
+        globalEnables &
+                (1 << static_cast<uint8_t>(BMCGlobalEnable::eventMsgFullIntr))
+            ? enable
+            : disable);
+
+    ipmi::setDbusProperty(bus, settingService, globalEnblObjpath,
+                          globalEnblInterface, "EventmsgBuf",
+                          globalEnables & (1 << static_cast<uint8_t>(
+                                               BMCGlobalEnable::eventMsgBuf))
+                              ? enable
+                              : disable);
+
+    ipmi::setDbusProperty(
+        bus, settingService, globalEnblObjpath, globalEnblInterface, "Sel",
+        globalEnables & (1 << static_cast<uint8_t>(BMCGlobalEnable::sel))
+            ? enable
+            : disable);
+
+    ipmi::setDbusProperty(
+        bus, settingService, globalEnblObjpath, globalEnblInterface, "OEM0",
+        globalEnables & (1 << static_cast<uint8_t>(BMCGlobalEnable::oem0))
+            ? enable
+            : disable);
+
+    ipmi::setDbusProperty(
+        bus, settingService, globalEnblObjpath, globalEnblInterface, "OEM1",
+        globalEnables & (1 << static_cast<uint8_t>(BMCGlobalEnable::oem1))
+            ? enable
+            : disable);
+
+    ipmi::setDbusProperty(
+        bus, settingService, globalEnblObjpath, globalEnblInterface, "OEM2",
+        globalEnables & (1 << static_cast<uint8_t>(BMCGlobalEnable::oem2))
+            ? enable
+            : disable);
 
     return ipmi::responseSuccess();
 }
