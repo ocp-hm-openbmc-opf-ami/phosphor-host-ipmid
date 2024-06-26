@@ -61,6 +61,15 @@ enum class LanParam : uint8_t
     IPv6StaticRouter1MAC = 66,
     IPv6StaticRouter1PrefixLength = 67,
     IPv6StaticRouter1PrefixValue = 68,
+    IPv6StaticRouter2IP = 69,
+    IPv6StaticRouter2MAC = 70,
+    IPv6StaticRouter2PrefixLength = 71,
+    IPv6StaticRouter2PrefixValue = 72,
+    IPv6DynamicRouterInfoSets=73,
+    IPv6DynamicRouterInfoIPAddress=74,
+    IPv6DynamicRouterInfoMACAddress=75,
+    IPv6DynamicRouterInfoPrefixLength=76,
+    IPv6DynamicRouterInfoPrefixValue=77
 };
 
 /** @brief IPMI IP Origin Types */
@@ -134,6 +143,14 @@ namespace IPv6RouterControlFlag
 constexpr uint8_t Static = 0;     //IPv6 Router Address Configuration Control Bits
 constexpr uint8_t Dynamic = 1;   //IPv6 Router Address Configuration Control Bits
 uint8_t StaticControl = 0;
+constexpr uint8_t Gateway6Idx=0;
+constexpr uint8_t PrefixIdx=1;
+constexpr uint8_t PrefixLenIdx=2;
+constexpr uint8_t Gateway6MACIdx=3;
+constexpr uint8_t IPV6STRLEN = 16;
+constexpr uint8_t MACSTRLEN = 6;
+constexpr uint8_t MAX_IPV6_DYNAMIC_ROUTER_INFO_SETS = 4;
+using RACFG_T = std::tuple<std::vector<uint8_t>, std::vector<uint8_t>, uint8_t, std::vector<uint8_t>>;
 }; // namespace IPv6RouterControlFlag
 
 // LAN Handler specific response codes

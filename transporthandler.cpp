@@ -344,9 +344,9 @@ std::optional<IfNeigh<family>> getGatewayNeighbor(sdbusplus::bus_t& bus,
 
 template <int family>
 void reconfigureGatewayMAC(sdbusplus::bus_t& bus, const ChannelParams& params,
-                           stdplus::EtherAddr mac)
+                           const char* Property, stdplus::EtherAddr mac)
 {
-    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
+    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params, Property);
     if (oldStaticAddr.empty())
     {
         log<level::ERR>("Tried to set Gateway MAC without Gateway");
@@ -369,9 +369,9 @@ void reconfigureGatewayMAC(sdbusplus::bus_t& bus, const ChannelParams& params,
 
 template <int family>
 void reconfigureGatewayPrefixLength(sdbusplus::bus_t& bus, const ChannelParams& params,
-                           const uint8_t prefixLength)
+                             const char* Property, const uint8_t prefixLength)
 {
-    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
+    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params, Property);
     if (oldStaticAddr.empty())
     {
         log<level::ERR>("Tried to set Gateway MAC without Gateway");
@@ -405,16 +405,16 @@ static bool getIPv6StaticRtr(sdbusplus::bus_t& bus, const ChannelParams& params)
 }
 
 template <int family>
-std::string getStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params)
+std::string getStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params, const char* Property)
 {
-    auto addr = std::get<std::string>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6StaticRtrAddr"));
+    auto addr = std::get<std::string>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, Property));
     return addr;
 }
 
-void setStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params, in6_addr& address)
+void setStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params, in6_addr& address, const char* Property)
 {
     // Save the old gateway MAC address if it exists so we can recreate it
-    auto oldStaticAddr = getStaticRtrAddr<AF_INET6>(bus, params);
+    auto oldStaticAddr = getStaticRtrAddr<AF_INET6>(bus, params, Property);
     std::optional<IfNeigh<AF_INET6>> neighbor;
     if (!oldStaticAddr.empty())
     {
@@ -426,14 +426,14 @@ void setStaticRtrAddr(sdbusplus::bus_t& bus, const ChannelParams& params, in6_ad
         }
     }
 
-    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6StaticRtrAddr", stdplus::toStr(stdplus::In6Addr{address}));
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, Property, stdplus::toStr(stdplus::In6Addr{address}));
     createNeighbor<AF_INET6>(bus, params, address, stdplus::fromStr<stdplus::EtherAddr>("00:00:00:00:00:00"), AddrFamily<AF_INET6>::defaultPrefix);
 }
 
 template <int family>
-std::optional<IfNeigh<family>> getStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params) {
+std::optional<IfNeigh<family>> getStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params, const char* Property) {
     ObjectLookupCache neighbors(bus, params, INTF_NEIGHBOR);
-    auto routerAddr = getStaticRtrAddr<AF_INET6>(bus, params);
+    auto routerAddr = getStaticRtrAddr<AF_INET6>(bus, params, Property);
     if(routerAddr.empty()){
         return std::nullopt;
     }
@@ -460,9 +460,9 @@ void setIPv6StaticRtr(sdbusplus::bus_t& bus, const ChannelParams& params,
  *  @param[in] params        - The parameters for the channel
  */
 template <int family>
-void DeleteStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params)
+void DeleteStaticRtrNeighbor(sdbusplus::bus_t& bus, const ChannelParams& params, const char* Property)
 {
-    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params);
+    auto oldStaticAddr = getStaticRtrAddr<family>(bus, params, Property);
     if (oldStaticAddr.empty())
     {
         return;
@@ -941,7 +941,6 @@ uint8_t getGARPIntervalProperty(sdbusplus::bus::bus& bus, const ChannelParams& p
     return (garpInterval/500);
 }
 
-
 /** @brief Set IPv4 Header Parameters on the given interface
  *
  *  @param[in] bus           - The bus object used for lookups
@@ -995,6 +994,30 @@ uint8_t getIPHeaderProperty(sdbusplus::bus::bus& bus, const ChannelParams& param
         bus, service.c_str(), logicalPath.c_str(), INTF_IPHEADER, Property));
 
     return (propertyValue);
+}
+
+/** @brief Gets the IPv6DynamicRouterInfo on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] Index         - set selector
+ *  @return RACFG_T          - tuple of Router Address, Router MAC Address, Prefix Value & Prefix Length
+ */
+IPv6RouterControlFlag::RACFG_T getIPv6DynamicRouterInfo(sdbusplus::bus::bus& bus,
+                                                const ChannelParams& params, uint8_t Index)
+{
+
+    auto newreq = bus.new_method_call(params.service.c_str(),
+                                      params.logicalPath.c_str(),
+                                      INTF_ETHERNET, "GetIPv6DynamicRouterInfo");
+
+    auto reply = bus.call(newreq);
+    std::vector<IPv6RouterControlFlag::RACFG_T> rInfo;
+    reply.read(rInfo);
+    if (Index < rInfo.size()) {
+        return rInfo[rInfo.size()-Index-1];
+    }
+    return IPv6RouterControlFlag::RACFG_T{};
 }
 
 RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
@@ -1481,7 +1504,8 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             
             bool staticRtr = channelCall<getEthProp<bool>>(channel, "IPv6EnableStaticRtr");
             if(staticRtr && control[IPv6RouterControlFlag::Dynamic]){
-                channelCall<DeleteStaticRtrNeighbor<AF_INET6>>(channel);
+                channelCall<DeleteStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtrAddr");
+                channelCall<DeleteStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
             }
 
             bool enableStaticRtr = IPv6RouterControlFlag::StaticControl;
@@ -1498,7 +1522,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 return responseCommandNotAvailable();
             }
 
-            channelCall<setStaticRtrAddr>(channel, routeAddr);
+            channelCall<setStaticRtrAddr>(channel, routeAddr, "IPv6StaticRtrAddr");
             return responseSuccess();
         }
         case LanParam::IPv6StaticRouter1MAC:
@@ -1511,7 +1535,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 return responseCommandNotAvailable();
             }
             
-            channelCall<reconfigureGatewayMAC<AF_INET6>>(channel, mac);
+            channelCall<reconfigureGatewayMAC<AF_INET6>>(channel, "IPv6StaticRtrAddr", mac);
             return responseSuccess();
         }
         case LanParam::IPv6StaticRouter1PrefixLength:
@@ -1531,7 +1555,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseInvalidFieldRequest();
             }
-            channelCall<reconfigureGatewayPrefixLength<AF_INET6>>(channel, prefix);
+            channelCall<reconfigureGatewayPrefixLength<AF_INET6>>(channel, "IPv6StaticRtrAddr", prefix);
             return responseSuccess();
         }
         case LanParam::IPv6StaticRouter1PrefixValue:
@@ -1581,6 +1605,80 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 req.trailingOk = true;
                 return response(resp);
             }
+        }
+        case LanParam::IPv6StaticRouter2IP:
+        {
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            in6_addr routeAddr = unpackT<stdplus::In6Addr>(req);
+            unpackFinal(req);
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+
+            channelCall<setStaticRtrAddr>(channel, routeAddr,"IPv6StaticRtr2Addr");
+            return responseSuccess();
+        }
+        case LanParam::IPv6StaticRouter2MAC:
+        {
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            auto mac = unpackT<stdplus::EtherAddr>(req);
+            unpackFinal(req);
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+
+            channelCall<reconfigureGatewayMAC<AF_INET6>>(channel, "IPv6StaticRtr2Addr", mac);
+            return responseSuccess();
+        }
+        case LanParam::IPv6StaticRouter2PrefixLength:
+        {
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            uint8_t prefix;
+            if (req.unpack(prefix) != 0)
+            {
+                return responseReqDataLenInvalid();
+            }
+            unpackFinal(req);
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+            if (prefix > MAX_IPV6_PREFIX_LENGTH)
+            {
+                return responseInvalidFieldRequest();
+            }
+            channelCall<reconfigureGatewayPrefixLength<AF_INET6>>(channel, "IPv6StaticRtr2Addr", prefix);
+            return responseSuccess();
+        }
+        case LanParam::IPv6StaticRouter2PrefixValue:
+        {
+            // Accept only null prefix value since currently not in use
+            in6_addr ip = unpackT<stdplus::In6Addr>(req);
+            unpackFinal(req);
+            if(!IPv6RouterControlFlag::StaticControl)
+            {
+                return responseCommandNotAvailable();
+            }
+
+            if(IN6_IS_ADDR_UNSPECIFIED(&ip))
+            {
+                return responseSuccess();
+            }
+            else
+            {
+                return responseInvalidFieldRequest();
+            }
+        }
+        case LanParam::IPv6DynamicRouterInfoSets:
+        case LanParam::IPv6DynamicRouterInfoIPAddress:
+        case LanParam::IPv6DynamicRouterInfoMACAddress:
+        case LanParam::IPv6DynamicRouterInfoPrefixLength:
+        case LanParam::IPv6DynamicRouterInfoPrefixValue:
+        {
+            req.trailingOk = true;
+            return response(ccParamReadOnly);
         }
     }
 
@@ -1900,7 +1998,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
             if (!channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA"))
             {
-                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel);
+                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtrAddr");
             }
 
             if(!routerAddr.empty()){
@@ -1919,7 +2017,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             auto neighbor = channelCall<getGatewayNeighbor<AF_INET6>>(channel);
             if(IPv6RouterControlFlag::StaticControl)
             {
-                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel);
+                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtrAddr");
                 if (neighbor)
                 {
                     mac = neighbor->mac;
@@ -1934,7 +2032,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
             if(IPv6RouterControlFlag::StaticControl)
             {
-                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel);
+                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtrAddr");
                 if (neighbor)
                 {
                     prefixLength = neighbor->prefixLength;
@@ -1971,6 +2069,157 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             {
                 return response(resp);
             }
+        }
+        case LanParam::IPv6StaticRouter2IP:
+        {
+            std::string routerAddr;
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            if (!channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA"))
+            {
+                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
+            }
+
+            if(!routerAddr.empty()){
+                ret.pack(stdplus::raw::asView<char>(stdplus::fromStr<stdplus::In6Addr>(routerAddr)));
+            }
+            else{
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+            }
+
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6StaticRouter2MAC:
+        {
+            stdplus::EtherAddr mac{};
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            auto neighbor = channelCall<getGatewayNeighbor<AF_INET6>>(channel);
+            if(IPv6RouterControlFlag::StaticControl)
+            {
+                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
+                if (neighbor)
+                {
+                    mac = neighbor->mac;
+                }
+            }
+            ret.pack(stdplus::raw::asView<char>(mac));
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6StaticRouter2PrefixLength:
+        {
+            uint8_t prefixLength = 0;
+            IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
+            if(IPv6RouterControlFlag::StaticControl)
+            {
+                auto neighbor = channelCall<getStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
+                if (neighbor)
+                {
+                    prefixLength = neighbor->prefixLength;
+                }
+            }
+            ret.pack(UINT8_C(prefixLength));
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6StaticRouter2PrefixValue:
+        {
+            ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DynamicRouterInfoSets:
+        {
+            ret.pack(IPv6RouterControlFlag::MAX_IPV6_DYNAMIC_ROUTER_INFO_SETS, uint8_t{});
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DynamicRouterInfoIPAddress:
+        {
+            if (set >= IPv6RouterControlFlag::MAX_IPV6_DYNAMIC_ROUTER_INFO_SETS)
+            {
+                return responseParmOutOfRange();
+            }
+
+            IPv6RouterControlFlag::RACFG_T res = channelCall<getIPv6DynamicRouterInfo>(channel,set);
+            ret.pack(UINT8_C(set));
+            bool DynamicControl = channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA");
+            if(!DynamicControl){
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+                return responseSuccess(std::move(ret));
+            }
+            if(!std::get<IPv6RouterControlFlag::Gateway6Idx>(res).empty()){
+                for(int i=0; i<IPv6RouterControlFlag::IPV6STRLEN; i++){
+                    ret.pack(stdplus::raw::asView<char>(std::get<IPv6RouterControlFlag::Gateway6Idx>(res)[i]));
+                }
+            }
+            else{
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+            }
+
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DynamicRouterInfoMACAddress:
+        {
+            if (set >= IPv6RouterControlFlag::MAX_IPV6_DYNAMIC_ROUTER_INFO_SETS)
+            {
+                return responseParmOutOfRange();
+            }
+
+            IPv6RouterControlFlag::RACFG_T res = channelCall<getIPv6DynamicRouterInfo>(channel,set);
+            ret.pack(UINT8_C(set));
+            bool DynamicControl = channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA");
+            if(!DynamicControl){
+                ret.pack(stdplus::raw::asView<char>(stdplus::EtherAddr{}));
+                return responseSuccess(std::move(ret));
+            }
+            if(!std::get<IPv6RouterControlFlag::Gateway6MACIdx>(res).empty()){
+                for(int i=0; i<IPv6RouterControlFlag::MACSTRLEN; i++){
+                    ret.pack(stdplus::raw::asView<char>(std::get<IPv6RouterControlFlag::Gateway6MACIdx>(res)[i]));
+                }
+            }
+            else{
+                ret.pack(stdplus::raw::asView<char>(stdplus::EtherAddr{}));
+            }
+
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DynamicRouterInfoPrefixLength:
+        {
+            if (set >= IPv6RouterControlFlag::MAX_IPV6_DYNAMIC_ROUTER_INFO_SETS)
+            {
+                return responseParmOutOfRange();
+            }
+
+            IPv6RouterControlFlag::RACFG_T res = channelCall<getIPv6DynamicRouterInfo>(channel,set);
+            ret.pack(UINT8_C(set));
+            bool DynamicControl = channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA");
+            if(!DynamicControl){
+                ret.pack(uint8_t{});
+                return responseSuccess(std::move(ret));
+            }
+            ret.pack(std::get<IPv6RouterControlFlag::PrefixLenIdx>(res));
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DynamicRouterInfoPrefixValue:
+        {
+            if (set >= IPv6RouterControlFlag::MAX_IPV6_DYNAMIC_ROUTER_INFO_SETS)
+            {
+                return responseParmOutOfRange();
+            }
+
+            IPv6RouterControlFlag::RACFG_T res = channelCall<getIPv6DynamicRouterInfo>(channel,set);
+            ret.pack(UINT8_C(set));
+            bool DynamicControl = channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA");
+            if(!DynamicControl){
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+                return responseSuccess(std::move(ret));
+            }
+            if(!std::get<IPv6RouterControlFlag::PrefixIdx>(res).empty()){
+                for(int i=0; i<IPv6RouterControlFlag::IPV6STRLEN; i++){
+                    ret.pack(stdplus::raw::asView<char>(std::get<IPv6RouterControlFlag::PrefixIdx>(res)[i]));
+                }
+            }
+            else{
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+            }
+
+            return responseSuccess(std::move(ret));
         }
     }
 
