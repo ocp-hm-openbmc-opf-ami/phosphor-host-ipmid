@@ -1502,10 +1502,10 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             bool enableRA = control[IPv6RouterControlFlag::Dynamic];
             channelCall<setEthProp<bool>>(channel, "IPv6AcceptRA", enableRA);
             
-            bool staticRtr = channelCall<getEthProp<bool>>(channel, "IPv6EnableStaticRtr");
-            if(staticRtr && control[IPv6RouterControlFlag::Dynamic]){
+            if(!IPv6RouterControlFlag::StaticControl){
                 channelCall<DeleteStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtrAddr");
                 channelCall<DeleteStaticRtrNeighbor<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
+
             }
 
             bool enableStaticRtr = IPv6RouterControlFlag::StaticControl;
@@ -1996,11 +1996,10 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         {
             std::string routerAddr;
             IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
-            if (!channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA"))
+            if (IPv6RouterControlFlag::StaticControl)
             {
                 routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtrAddr");
             }
-
             if(!routerAddr.empty()){
                 ret.pack(stdplus::raw::asView<char>(stdplus::fromStr<stdplus::In6Addr>(routerAddr)));
             }
