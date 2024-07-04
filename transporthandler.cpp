@@ -1020,6 +1020,65 @@ IPv6RouterControlFlag::RACFG_T getIPv6DynamicRouterInfo(sdbusplus::bus::bus& bus
     return IPv6RouterControlFlag::RACFG_T{};
 }
 
+/** @brief Gets the IPv6 DHCPv6 DUID Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return DUID
+ */
+auto getIPv6DHCPv6DUIDProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    auto duid = std::get<std::string>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "DHCPv6DUID"));
+    return duid;
+}
+
+/** @brief Gets the IPv6 DHCPv6 DUID Storage Length Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return DUID Storage Length
+ */
+uint8_t getIPv6DHCPv6DUIDStorageLengthProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    auto value = std::get<uint8_t>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "DHCPv6DUIDStorageLength"));
+    return value;
+}
+
+/** @brief Gets the IPv6 DHCPv6 Timing Configuration Support Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return DHCPv6 Timing Configuration Support
+ */
+uint8_t getIPv6DHCPv6TimingConfSupportProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    auto value = std::get<uint8_t>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "DHCPv6TimingConfSupport"));
+    return value;
+}
+
+/** @brief Gets the IPv6 DHCPv6 Timing Configuration Parameters Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return DHCPv6 Timing Configuration
+ */
+std::vector<uint8_t> getIPv6DHCPv6TimingConfParamProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    auto value = getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "DHCPv6TimingConfParam");
+    return std::get<std::vector<uint8_t>>(value);
+}
+
+/** @brief Sets the IPv6 DHCPv6 Timing Configuration Parameters Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] data          - DHCPv6 Timing Configuration Parameters
+ */
+void setIPv6DHCPv6TimingConfParamProperty(sdbusplus::bus::bus& bus, const ChannelParams& params, std::vector<uint8_t>& data)
+{
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,"DHCPv6TimingConfParam", data);
+}
+
 RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     uint8_t parameter, message::Payload& req)
 {
@@ -1680,6 +1739,124 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             req.trailingOk = true;
             return response(ccParamReadOnly);
         }
+        case LanParam::IPv6DHCPv6DynamicDUIDStorageLength:
+        {
+            req.trailingOk = true;
+            return response(ccParamReadOnly);
+        }
+        case LanParam::IPv6DHCPv6DynamicDUIDs:
+        {
+            req.trailingOk = true;
+            return response(ccParamReadOnly);
+        }
+        case LanParam::IPv6DHCPv6TimingConfigurationSupport:
+        {
+            req.trailingOk = true;
+            return response(ccParamReadOnly);
+        }
+        case LanParam::IPv6DHCPv6TimingConfiguration:
+        {
+            uint8_t set;
+            uint8_t block;
+            if (req.unpack(set, block) != 0)
+            {
+                return responseReqDataLenInvalid();
+            }
+
+            if(set != 0)
+            {
+                return responseInvalidFieldRequest();
+            }
+            if(block > 1)
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            std::vector<uint8_t> reqData={};
+
+            if(block == 0)
+            {
+                const size_t datalen=16;
+                std::array<uint8_t, datalen> data;
+                if((req.unpack(data) != 0) || !req.fullyUnpacked())
+                {
+                    return responseReqDataLenInvalid();
+                }
+
+                if( (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_DELAY)] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_TIMEOUT)] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_RT)] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_RD)] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::INF_MAX_DELAY)] != 0) )
+                {
+                    return responseInvalidFieldRequest();
+                }
+
+                if( (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::SOL_MAX_DELAY)] > DHCPv6TimingParamMaxLimit::SOL_MAX_DELAY) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::SOL_TIMEOUT)] > DHCPv6TimingParamMaxLimit::SOL_TIMEOUT) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::REQ_TIMEOUT)] > DHCPv6TimingParamMaxLimit::REQ_TIMEOUT) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::REQ_MAX_RC)] > DHCPv6TimingParamMaxLimit::REQ_MAX_RC) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::INF_TIMEOUT)] > DHCPv6TimingParamMaxLimit::INF_TIMEOUT) )
+                {
+                    return responseInvalidFieldRequest();
+                }
+
+                for(int i=0;i<static_cast<int>(datalen);i++)
+                {
+                    if( (static_cast<int>(DHCPv6TimingParamIndex::CNF_MAX_DELAY) == i) ||
+                        (static_cast<int>(DHCPv6TimingParamIndex::CNF_TIMEOUT) == i) ||
+                        (static_cast<int>(DHCPv6TimingParamIndex::CNF_MAX_RT) == i) ||
+                        (static_cast<int>(DHCPv6TimingParamIndex::CNF_MAX_RD) == i) ||
+                        (static_cast<int>(DHCPv6TimingParamIndex::INF_MAX_DELAY) == i) )
+                    {
+                        continue;
+                    }
+                    if(data[i] == 0)
+                    {
+                        return responseInvalidFieldRequest();
+                    }
+                }
+                reqData.assign(data.begin(),data.end());
+                reqData.erase(reqData.begin()+static_cast<uint8_t>(DHCPv6TimingParamIndex::INF_MAX_DELAY));
+                reqData.erase(reqData.begin()+static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_DELAY),
+                                reqData.begin()+static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_RD)+1);
+                auto curData = channelCall<getIPv6DHCPv6TimingConfParamProperty>(channel);
+                reqData.push_back(curData.back());
+                channelCall<setIPv6DHCPv6TimingConfParamProperty>(channel,reqData);
+            }
+            else if(block == 1)
+            {
+                const size_t datalen=6;
+                const uint8_t blocklen=16;
+                std::array<uint8_t, datalen> data;
+                if((req.unpack(data) != 0) || !req.fullyUnpacked())
+                {
+                    return responseReqDataLenInvalid();
+                }
+
+                if( (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::REL_TIMEOUT)-blocklen] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::REL_MAX_RC)-blocklen] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::DEC_TIMEOUT)-blocklen] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::DEC_MAX_RC)-blocklen] != 0) ||
+                    (data[static_cast<uint8_t>(DHCPv6TimingParamIndex::HOP_COUNT_LIMIT)-blocklen] != 0) )
+                {
+                    return responseInvalidFieldRequest();
+                }
+
+                if(data[static_cast<uint8_t>(DHCPv6TimingParamIndex::INF_MAX_RT)-blocklen] == 0)
+                {
+                    return responseInvalidFieldRequest();
+                }
+
+                reqData.assign(data.begin(),data.end());
+                auto curData = channelCall<getIPv6DHCPv6TimingConfParamProperty>(channel);
+                curData.pop_back();
+                curData.push_back(reqData.front());
+                channelCall<setIPv6DHCPv6TimingConfParamProperty>(channel,curData);
+            }
+
+            return responseSuccess();
+        }
     }
 
     if (parameter >= oemCmdStart)
@@ -2218,6 +2395,101 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
                 ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
             }
 
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DHCPv6DynamicDUIDStorageLength:
+        {
+            if((set != 0) || (block != 0)){
+                return responseInvalidFieldRequest();
+            }
+
+            uint8_t value = channelCall<getIPv6DHCPv6DUIDStorageLengthProperty>(channel);
+            ret.pack(value);
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DHCPv6DynamicDUIDs:
+        {
+            if(set != 0){
+                return responseInvalidFieldRequest();
+            }
+            uint8_t sl = channelCall<getIPv6DHCPv6DUIDStorageLengthProperty>(channel);
+            if(block >= sl){
+                return responseInvalidFieldRequest();
+            }
+
+            ret.pack(stdplus::raw::asView<char>(set));
+            ret.pack(stdplus::raw::asView<char>(block));
+
+            auto duid = channelCall<getIPv6DHCPv6DUIDProperty>(channel);
+            if(duid.length() == 0)
+            {
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+                return responseSuccess(std::move(ret));
+            }
+            if(duid.length() > static_cast<size_t>(block*32))
+            {
+                duid.erase(duid.begin(),duid.begin()+(block*32));
+                int blocklen=16;
+                while(blocklen > 0)
+                {
+                    if(!duid.empty()){
+                        if(duid.length() >= 2){
+                            ret.pack(stdplus::raw::asView<char>(static_cast<uint8_t>(std::stoi(duid.substr(0,2),0,16))));
+                            duid.erase(0,2);
+                        }
+                        else{
+                            ret.pack(stdplus::raw::asView<char>(static_cast<uint8_t>(std::stoi(duid,0,16))));
+                            duid.clear();
+                        }
+                    }
+                    else{
+                        sl=0;
+                        ret.pack(stdplus::raw::asView<char>(sl));
+                    }
+                    blocklen--;
+                }
+            }
+            else{
+                ret.pack(stdplus::raw::asView<char>(stdplus::In6Addr{}));
+            }
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DHCPv6TimingConfigurationSupport:
+        {
+            if((set != 0) || (block != 0)){
+                return responseInvalidFieldRequest();
+            }
+
+            uint8_t value = channelCall<getIPv6DHCPv6TimingConfSupportProperty>(channel);
+            ret.pack(value);
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6DHCPv6TimingConfiguration:
+        {
+            if(set != 0)
+            {
+                return responseInvalidFieldRequest();
+            }
+            if(block > 1)
+            {
+                return responseInvalidFieldRequest();
+            }
+            auto data = channelCall<getIPv6DHCPv6TimingConfParamProperty>(channel);
+            ret.pack(stdplus::raw::asView<char>(set));
+            ret.pack(stdplus::raw::asView<char>(block));
+            if(block == 0){
+                data.erase(data.begin() + data.size());
+                data.insert(data.begin() + static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_DELAY),
+                (static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_RD) - static_cast<uint8_t>(DHCPv6TimingParamIndex::CNF_MAX_DELAY)) + 1, 0);
+                data.insert(data.begin() + static_cast<uint8_t>(DHCPv6TimingParamIndex::INF_MAX_DELAY), 0);
+            }
+            else if(block == 1)
+            {
+                data.erase(data.begin(), data.end() - 1);
+                data.insert(data.begin() + 1, (static_cast<uint8_t>(DHCPv6TimingParamIndex::HOP_COUNT_LIMIT)
+                            - static_cast<uint8_t>(DHCPv6TimingParamIndex::REL_TIMEOUT)) + 1, 0);
+            }
+            ret.pack(stdplus::raw::asView<char>(data));
             return responseSuccess(std::move(ret));
         }
     }

@@ -56,6 +56,10 @@ enum class LanParam : uint8_t
     IPv6Status = 55,
     IPv6StaticAddresses = 56,
     IPv6DynamicAddresses = 59,
+    IPv6DHCPv6DynamicDUIDStorageLength = 60,
+    IPv6DHCPv6DynamicDUIDs = 61,
+    IPv6DHCPv6TimingConfigurationSupport = 62,
+    IPv6DHCPv6TimingConfiguration = 63,
     IPv6RouterControl = 64,
     IPv6StaticRouter1IP = 65,
     IPv6StaticRouter1MAC = 66,
@@ -193,6 +197,44 @@ enum class SolConfParam : uint8_t
 
 constexpr uint8_t ipmiCCParamNotSupported = 0x80;
 constexpr uint8_t ipmiCCWriteReadParameter = 0x82;
+
+/** @enum DHCPv6TimingParamIndex
+ *
+ */
+enum class DHCPv6TimingParamIndex : uint8_t
+{
+    SOL_MAX_DELAY = 0,
+    SOL_TIMEOUT = 1,
+    SOL_MAX_RT = 2,
+    REQ_TIMEOUT = 3,
+    REQ_MAX_RT = 4,
+    REQ_MAX_RC = 5,
+    CNF_MAX_DELAY = 6,
+    CNF_TIMEOUT = 7,
+    CNF_MAX_RT = 8,
+    CNF_MAX_RD = 9,
+    REN_TIMEOUT = 10,
+    REN_MAX_RT = 11,
+    REB_TIMEOUT = 12,
+    REB_MAX_RT = 13,
+    INF_MAX_DELAY = 14,
+    INF_TIMEOUT = 15,
+    INF_MAX_RT = 16,
+    REL_TIMEOUT = 17,
+    REL_MAX_RC = 18,
+    DEC_TIMEOUT = 19,
+    DEC_MAX_RC = 20,
+    HOP_COUNT_LIMIT = 21
+};
+
+namespace DHCPv6TimingParamMaxLimit
+{
+    constexpr uint8_t SOL_MAX_DELAY = 254;
+    constexpr uint8_t SOL_TIMEOUT = 254;
+    constexpr uint8_t REQ_TIMEOUT = 254;
+    constexpr uint8_t REQ_MAX_RC = 101;
+    constexpr uint8_t INF_TIMEOUT = 254;
+}; // namespace DHCPv6TimingParamMaxLimit
 
 } // namespace transport
 } // namespace ipmi
