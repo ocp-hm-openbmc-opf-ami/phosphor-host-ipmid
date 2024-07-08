@@ -73,7 +73,9 @@ enum class LanParam : uint8_t
     IPv6DynamicRouterInfoIPAddress=74,
     IPv6DynamicRouterInfoMACAddress=75,
     IPv6DynamicRouterInfoPrefixLength=76,
-    IPv6DynamicRouterInfoPrefixValue=77
+    IPv6DynamicRouterInfoPrefixValue=77,
+    IPv6SLAACTimingConfigurationSupport=79,
+    IPv6SLAACTimingConfiguration=80
 };
 
 /** @brief IPMI IP Origin Types */
@@ -235,6 +237,31 @@ namespace DHCPv6TimingParamMaxLimit
     constexpr uint8_t REQ_MAX_RC = 101;
     constexpr uint8_t INF_TIMEOUT = 254;
 }; // namespace DHCPv6TimingParamMaxLimit
+
+namespace SLAACTimingParamIndex
+{
+    constexpr int MaxRtrSolicitationDelay = 0;
+    constexpr int RtrSolicitationInterval = 1;
+    constexpr int MaxRtrSolicitations = 2;
+    constexpr int DupAddrDetectTransmits = 3;
+    constexpr int MaxMulticastSolicit = 4;
+    constexpr int MaxUnicastSolicit = 5;
+    constexpr int MaxAnycastDelayTime = 6;
+    constexpr int MaxNeighborAdvertisement = 7;
+    constexpr int ReachableTime = 8;
+    constexpr int RetransTimer = 9;
+    constexpr int DelayFirstProbeTime = 10;
+    constexpr int MaxRandomFactor = 11;
+    constexpr int MinRandomFactor = 12;
+};
+
+namespace SLAACTimingParamMaxLimit
+{
+    constexpr uint8_t MaxRtrSolicitations = 100;
+    constexpr uint8_t DupAddrDetectTransmits = 101;
+    constexpr uint8_t MaxMulticastSolicit = 100;
+    constexpr uint8_t MaxUnicastSolicit = 100;
+}; // namespace DHCPv6TimingParamDefault
 
 } // namespace transport
 } // namespace ipmi

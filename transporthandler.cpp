@@ -1079,6 +1079,41 @@ void setIPv6DHCPv6TimingConfParamProperty(sdbusplus::bus::bus& bus, const Channe
     setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,"DHCPv6TimingConfParam", data);
 }
 
+/** @brief Gets the IPv6 SLAAC Timing Configuration Support Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return SLAAC Timing Configuration Support
+ */
+uint8_t getIPv6SLAACTimingConfSupportProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    auto value = std::get<uint8_t>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6SLAACTimingConfSupport"));
+    return value;
+}
+
+/** @brief Gets the IPv6 SLAAC Timing Configuration Parameters Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @return SLAAC Timing Configuration
+ */
+std::vector<uint8_t> getIPv6SLAACTimingConfParamProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    auto value = getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "IPv6SLAACTimingConfParam");
+    return std::get<std::vector<uint8_t>>(value);
+}
+
+/** @brief Sets the IPv6 SLAAC Timing Configuration Parameters Property on the given interface
+ *
+ *  @param[in] bus           - The bus object used for lookups
+ *  @param[in] params        - The parameters for the channel
+ *  @param[in] data          - SLAAC Timing Configuration Parameters
+ */
+void setIPv6SLAACTimingConfParamProperty(sdbusplus::bus::bus& bus, const ChannelParams& params, std::vector<uint8_t>& data)
+{
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,"IPv6SLAACTimingConfParam", data);
+}
+
 RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     uint8_t parameter, message::Payload& req)
 {
@@ -1857,6 +1892,80 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
 
             return responseSuccess();
         }
+        case LanParam::IPv6SLAACTimingConfigurationSupport:
+        {
+            req.trailingOk = true;
+            return response(ccParamReadOnly);
+        }
+        case LanParam::IPv6SLAACTimingConfiguration:
+        {
+            uint8_t set;
+            uint8_t block;
+            if (req.unpack(set, block) != 0)
+            {
+                return responseReqDataLenInvalid();
+            }
+
+            if((set != 0) || (block != 0))
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            std::vector<uint8_t> reqData={};
+
+            const size_t datalen=16;
+            std::array<uint8_t, datalen> data;
+            if((req.unpack(data) != 0) || !req.fullyUnpacked())
+            {
+                return responseReqDataLenInvalid();
+            }
+
+            if( (data[SLAACTimingParamIndex::MaxNeighborAdvertisement] != 0) ||
+                (data[SLAACTimingParamIndex::MaxRandomFactor] != 0) ||
+                (data[SLAACTimingParamIndex::MinRandomFactor] != 0) )
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            if( ((data[SLAACTimingParamIndex::MaxRtrSolicitations] > SLAACTimingParamMaxLimit::MaxRtrSolicitations) && 
+                (data[SLAACTimingParamIndex::MaxRtrSolicitations] < 255)) ||
+                (data[SLAACTimingParamIndex::DupAddrDetectTransmits] > SLAACTimingParamMaxLimit::DupAddrDetectTransmits) ||
+                (data[SLAACTimingParamIndex::MaxMulticastSolicit] > SLAACTimingParamMaxLimit::MaxMulticastSolicit) ||
+                (data[SLAACTimingParamIndex::MaxUnicastSolicit] > SLAACTimingParamMaxLimit::MaxUnicastSolicit) )
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            for(int i=0;i<static_cast<int>(datalen);i++)
+            {
+                if((i > SLAACTimingParamIndex::MaxRandomFactor) && (i < static_cast<int>(datalen)))
+                {
+                    if(data[i] != 0)
+                    {
+                        return responseInvalidFieldRequest();
+                    }
+                }
+                else
+                {
+                    if( (SLAACTimingParamIndex::MaxNeighborAdvertisement == i) ||
+                        (SLAACTimingParamIndex::MaxRandomFactor == i) ||
+                        (SLAACTimingParamIndex::MinRandomFactor == i) ||
+                        (SLAACTimingParamIndex::DupAddrDetectTransmits == i) )
+                    {
+                        continue;
+                    }
+                    if(data[i] == 0)
+                    {
+                        return responseInvalidFieldRequest();
+                    }
+                }
+            }
+
+            reqData.assign(data.begin(),data.end());
+            reqData.erase(reqData.begin()+static_cast<uint8_t>(SLAACTimingParamIndex::MaxRandomFactor), reqData.end());
+            channelCall<setIPv6SLAACTimingConfParamProperty>(channel,reqData);
+            return responseSuccess();
+        }
     }
 
     if (parameter >= oemCmdStart)
@@ -2489,6 +2598,31 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
                 data.insert(data.begin() + 1, (static_cast<uint8_t>(DHCPv6TimingParamIndex::HOP_COUNT_LIMIT)
                             - static_cast<uint8_t>(DHCPv6TimingParamIndex::REL_TIMEOUT)) + 1, 0);
             }
+            ret.pack(stdplus::raw::asView<char>(data));
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6SLAACTimingConfigurationSupport:
+        {
+            if((set != 0) || (block != 0)){
+                return responseInvalidFieldRequest();
+            }
+
+            uint8_t value = channelCall<getIPv6SLAACTimingConfSupportProperty>(channel);
+            ret.pack(value);
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::IPv6SLAACTimingConfiguration:
+        {
+            if((set != 0) || (block != 0))
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            auto data = channelCall<getIPv6SLAACTimingConfParamProperty>(channel);
+            ret.pack(stdplus::raw::asView<char>(set));
+            ret.pack(stdplus::raw::asView<char>(block));
+
+            data.insert(data.begin() + SLAACTimingParamIndex::MaxRandomFactor, (16 - SLAACTimingParamIndex::MaxRandomFactor), 0);
             ret.pack(stdplus::raw::asView<char>(data));
             return responseSuccess(std::move(ret));
         }
