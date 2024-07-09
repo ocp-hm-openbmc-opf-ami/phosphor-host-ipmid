@@ -1198,9 +1198,14 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     // management. Modifying IPv6 state is done using
                     // a completely different Set LAN Configuration
                     // subcommand.
-                    IsDHCP = true;
-                    channelCall<reconfigureIfAddr4>(channel, std::nullopt, std::nullopt);
-                    channelCall<setEthProp<bool>>(channel, "DHCP4", true);
+                    
+		    bool dhcp;
+                    dhcp = channelCall<getEthProp<bool>>(channel, "DHCP4");
+                    if(!dhcp){
+                            IsDHCP = true;
+                            channelCall<reconfigureIfAddr4>(channel, std::nullopt, std::nullopt);
+                            channelCall<setEthProp<bool>>(channel, "DHCP4", true);
+                    }
                     return responseSuccess();
                 case IPSrc::Unspecified:
                     return responseInvalidFieldRequest();
