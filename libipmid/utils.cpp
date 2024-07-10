@@ -567,6 +567,9 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
                       std::vector<uint8_t> writeData,
                       std::vector<uint8_t>& readBuf)
 {
+    int ret = 0;
+    uint8_t data[2] = {0};
+    i2c_rdwr_ioctl_data msgreadwrite = {};
     static constexpr uint8_t NotAcknowledgementOnWrite = 0x83;
     // Open the i2c device, for low-level combined data write/read
     int i2cDev = ::open(i2cBus.c_str(), O_RDWR | O_CLOEXEC);
@@ -579,35 +582,39 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
 
     const size_t writeCount = writeData.size();
     const size_t readCount = readBuf.size();
-    int msgCount = 0;
     i2c_msg i2cmsg[2] = {};
     if (writeCount)
     {
         // Data will be writtern to the target address
-        i2cmsg[msgCount].addr = targetAddr;
-        i2cmsg[msgCount].flags = 0x00;
-        i2cmsg[msgCount].len = writeCount;
-        i2cmsg[msgCount].buf = writeData.data();
-        msgCount++;
+        i2cmsg[0].addr = targetAddr;
+        i2cmsg[0].flags = 0x00;
+        i2cmsg[0].len = writeCount;
+        i2cmsg[0].buf = writeData.data();
+        msgreadwrite.msgs = &i2cmsg[0];
+        msgreadwrite.nmsgs = 1;
+        ret = ::ioctl(i2cDev, I2C_RDWR, &msgreadwrite);
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     if (readCount)
     {
         // Data will be read into the buffer from the target address
-        i2cmsg[msgCount].addr = targetAddr;
-        i2cmsg[msgCount].flags = I2C_M_RD;
-        i2cmsg[msgCount].len = readCount;
-        i2cmsg[msgCount].buf = readBuf.data();
-        msgCount++;
+        i2cmsg[0].addr = targetAddr;
+        i2cmsg[0].flags = 0;
+        i2cmsg[0].len = 1;
+        i2cmsg[0].buf = data;
+
+        i2cmsg[1].addr = targetAddr;
+        i2cmsg[1].flags = I2C_M_RD;
+        i2cmsg[1].len = readCount;
+        i2cmsg[1].buf = readBuf.data();
+
+        data[0] = 0x00;
+
+        msgreadwrite.msgs = &i2cmsg[0];
+        msgreadwrite.nmsgs = 2;
+        ret = ::ioctl(i2cDev, I2C_RDWR, &msgreadwrite);
     }
-
-    i2c_rdwr_ioctl_data msgReadWrite = {};
-    msgReadWrite.msgs = i2cmsg;
-    msgReadWrite.nmsgs = msgCount;
-
-    // Perform the combined write/read
-    int ret = ::ioctl(i2cDev, I2C_RDWR, &msgReadWrite);
     ::close(i2cDev);
-
     if (ret < 0)
     {
         log<level::ERR>("I2C WR Failed!",
@@ -616,7 +623,7 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
     }
     if (readCount)
     {
-        readBuf.resize(msgReadWrite.msgs[msgCount - 1].len);
+        readBuf.resize(readCount);
     }
 
     return ipmi::ccSuccess;
