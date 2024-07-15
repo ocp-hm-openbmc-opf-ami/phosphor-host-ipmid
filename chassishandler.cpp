@@ -2104,6 +2104,10 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
         {
             return ipmi::responseInvalidFieldRequest();
         }
+        if (setInProgressFlag == setInProgressMask)
+        {
+            return ipmi::responseParmNotSupported();
+        }
         if (rsvd)
         {
             return ipmi::responseInvalidFieldRequest();
