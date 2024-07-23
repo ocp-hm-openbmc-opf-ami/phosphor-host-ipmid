@@ -2359,7 +2359,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         {
             std::string routerAddr;
             IPv6RouterControlFlag::StaticControl = channelCall<getIPv6StaticRtr>(channel);
-            if (!channelCall<getEthProp<bool>>(channel, "IPv6AcceptRA"))
+            if (IPv6RouterControlFlag::StaticControl)
             {
                 routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
             }
