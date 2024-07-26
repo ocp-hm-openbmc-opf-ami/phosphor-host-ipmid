@@ -79,3 +79,7 @@ option('dynamic-storages-only', type: 'feature', value: 'disabled', description:
 
 # open-power specific functionality.
 option('open-power', type: 'feature', description: 'Support open-power specific functions')
+
+# non intel platforms
+option('non-intel-platforms' , type: 'feature', value: 'disabled', description: 'If non-intel platforms disable the ipmi kcs in clear Queue.')
+

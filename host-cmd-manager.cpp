@@ -106,20 +106,21 @@ void Manager::clearQueue()
         // `false` indicating Failure
         std::get<CallBack>(command)(ipmiCmdData, false);
     }
+#ifdef IF_INTEL_PLATFORMS
+    auto host = ::ipmi::getService(this->bus, IPMI_INTERFACE, IPMI_PATH);
+    auto method = this->bus.new_method_call(host.c_str(), IPMI_PATH,
+                                            IPMI_INTERFACE, "clearAttention");
 
-   auto host = ::ipmi::getService(this->bus, IPMI_INTERFACE, IPMI_PATH);
-     auto method = this->bus.new_method_call(host.c_str(), IPMI_PATH,
-                                             IPMI_INTERFACE, "clearAttention");
- 
-     try
-     {
-         auto reply = this->bus.call(method);
-     }
-     catch (sdbusplus::exception_t&)
-     {
-         log<level::ERR>("Error in clearing SMS attention");
-         elog<InternalFailure>();
-     }
+    try
+    {
+        auto reply = this->bus.call(method);
+    }
+    catch (sdbusplus::exception_t&)
+    {
+        log<level::ERR>("Error in clearing SMS attention");
+        elog<InternalFailure>();
+    }
+#endif
 }
 
 // Called for alerting the host
@@ -129,7 +130,8 @@ void Manager::checkQueueAndAlertHost()
     {
         log<level::DEBUG>("Asserting SMS Attention");
 
-         auto host = ::ipmi::getService(this->bus, IPMI_INTERFACE, IPMI_PATH);
+#ifdef IF_INTEL_PLATFORMS
+        auto host = ::ipmi::getService(this->bus, IPMI_INTERFACE, IPMI_PATH);
         // Start the timer for this transaction
         auto time = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::seconds(IPMI_SMS_ATN_ACK_TIMEOUT_SECS));
@@ -142,18 +144,19 @@ void Manager::checkQueueAndAlertHost()
         }
 
         auto method = this->bus.new_method_call(host.c_str(), IPMI_PATH,
-                                                 IPMI_INTERFACE, "setAttention");
-        
+                                                IPMI_INTERFACE, "setAttention");
+
         try
         {
             auto reply = this->bus.call(method);
 
-           log<level::DEBUG>("SMS Attention asserted");
+            log<level::DEBUG>("SMS Attention asserted");
         }
         catch (const std::exception&)
         {
             log<level::ERR>("Error when call setAttention method");
         }
+#endif
     }
 }
 

@@ -99,6 +99,10 @@ foreach option_key, option_value : feature_map
   endif
 endforeach
 
+if get_option('non-intel-platforms').disabled()
+  add_project_arguments('-DIF_INTEL_PLATFORMS', language: 'cpp')
+endif
+
 add_project_arguments(
   cpp.get_supported_arguments([
     '-Wno-psabi',
