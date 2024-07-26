@@ -1248,7 +1248,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 case IPSrc::BMC:
                     return responseInvalidFieldRequest();
             }
-            return response(ccParamNotSupported);
+            return responseInvalidFieldRequest();
         }
         case LanParam::MAC:
         {
@@ -1463,7 +1463,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     channelCall<enableIPAddressing<AF_INET6>>(channel, true);
                     return responseSuccess();
             }
-            return response(ccParamNotSupported);
+            return responseInvalidFieldRequest();
         }
         case LanParam::IPv6HeaderStaticTrafficClass:
         {
