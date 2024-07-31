@@ -65,6 +65,10 @@ using Activation =
     sdbusplus::server::xyz::openbmc_project::software::Activation;
 using BMC = sdbusplus::server::xyz::openbmc_project::state::BMC;
 namespace fs = std::filesystem;
+struct GlobalEncoding
+{
+    uint8_t globalencoding;
+} globalEncoding;
 
 #ifdef ENABLE_I2C_WHITELIST_CHECK
 typedef struct
@@ -1402,7 +1406,8 @@ ipmi::RspType<uint8_t,                // Parameter revision
     size_t count = 0;
     if (setSelector == 0)
     {                               // First chunk has only 14 bytes.
-        configData.emplace_back(0); // encoding
+        configData.emplace_back(
+            globalEncoding.globalencoding); // encoding
         configData.emplace_back(paramString.length()); // string length
         count = std::min(paramString.length(), smallChunkSize);
         configData.resize(count + configDataOverhead);
@@ -1428,6 +1433,9 @@ ipmi::RspType<uint8_t,                // Parameter revision
         std::copy_n(paramString.begin() + offset, count,
                     configData.begin()); // 16 bytes chunk
     }
+    phosphor::logging::log<phosphor::logging::level::INFO>(
+                "The String Data: ",
+    phosphor::logging::entry("The Parameter String: %s", paramString.c_str()));
     return ipmi::responseSuccess(paramRevision, setSelector, configData);
 }
 
@@ -1470,14 +1478,7 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
 
     if (configData.size() > configParameterLength)
     {
-        return ipmi::responseInvalidFieldRequest();
-    }
-
-    // Append zero's to remaining bytes
-    if (configData.size() < configParameterLength)
-    {
-        fill_n(back_inserter(configData),
-               (configParameterLength - configData.size()), 0x00);
+        return ipmi::responseReqDataLenInvalid();
     }
 
     if (!sysInfoParamStore)
@@ -1503,6 +1504,7 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
     if (setSelector == 0) // First chunk has only 14 bytes.
     {
         uint8_t encoding = configData.at(0);
+        globalEncoding.globalencoding = encoding;
         if (encoding > maxValidEncodingData)
         {
             return ipmi::responseInvalidFieldRequest();
@@ -1516,6 +1518,16 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
         count = std::min(stringLen, smallChunkSize);
         count = std::min(count, configData.size());
         paramString.resize(stringLen); // reserve space
+        if (stringLen == configData.size() - configDataOverhead)
+        {
+            // Append zero's to remaining bytes
+            fill_n(back_inserter(configData),
+                   (configParameterLength - configData.size()), 0x00);
+        }
+        else
+        {
+            return ipmi::responseReqDataLenInvalid();
+        }
         std::copy_n(configData.begin() + configDataOverhead, count,
                     paramString.begin());
     }
