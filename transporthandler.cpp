@@ -1114,6 +1114,41 @@ void setIPv6SLAACTimingConfParamProperty(sdbusplus::bus::bus& bus, const Channel
     setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,"IPv6SLAACTimingConfParam", data);
 }
 
+/** @brief Sets the value for the bakcup gateway of the channel
+ *
+ *  @param[in] bus     - The bus object used for lookups
+ *  @param[in] params  - The parameters for the channel
+ *  @param[in] gateway - Backup Gateway address to apply
+ */
+void setBackupGatewayProperty(sdbusplus::bus_t& bus, const ChannelParams& params, std::string gateway)
+{
+    setDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,"BackupGateway", gateway);
+}
+
+/** @brief Gets the value for the bakcup gateway of the channel
+ *
+ *  @param[in] bus     - The bus object used for lookups
+ *  @param[in] params  - The parameters for the channel
+ *  @return gateway
+ */
+std::string getBackupGatewayProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto value = getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,"BackupGateway");
+    return std::get<std::string>(value);
+}
+
+/** @brief Gets the value for the bakcup gateway mac address of the channel
+ *
+ *  @param[in] bus     - The bus object used for lookups
+ *  @param[in] params  - The parameters for the channel
+ *  @return gateway mac address
+ */
+std::string getBackupGatewayMACAddressProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto value = getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,"BackupGatewayMACAddress");
+    return std::get<std::string>(value);
+}
+
 RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     uint8_t parameter, message::Payload& req)
 {
@@ -1966,6 +2001,34 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             channelCall<setIPv6SLAACTimingConfParamProperty>(channel,reqData);
             return responseSuccess();
         }
+        case LanParam::BackupGateway:
+        {
+            auto gateway = unpackT<stdplus::In4Addr>(req);
+            unpackFinal(req);
+
+            if (channelCall<getEthProp<bool>>(channel, "DHCP4"))
+            {
+                return responseCommandNotAvailable();
+            }
+
+            auto dGateway = channelCall<getGatewayProperty<AF_INET>>(channel);
+            auto defaultgatewayStr = stdplus::toStr(dGateway.value_or(stdplus::In4Addr{}));
+
+            std::string gatewayStr = stdplus::toStr(gateway);
+
+            if(gatewayStr.compare(defaultgatewayStr)==0)
+            {
+                return responseInvalidFieldRequest();
+            }
+            
+            channelCall<setBackupGatewayProperty>(channel, gatewayStr);
+            return responseSuccess();
+        }
+        case LanParam::BackupGatewayMAC:
+        {
+            log<level::ERR>("Set Lan - Not allow to set Backup gateway MAC Address");
+            return response(ipmiCCWriteReadParameter);
+        }
     }
 
     if (parameter >= oemCmdStart)
@@ -2626,6 +2689,45 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             ret.pack(stdplus::raw::asView<char>(data));
             return responseSuccess(std::move(ret));
         }
+        case LanParam::BackupGateway:
+        {
+            if((set != 0) || (block != 0))
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            auto gatewayStr = channelCall<getBackupGatewayProperty>(channel);
+            if(gatewayStr.empty())
+            {
+                ret.pack(stdplus::raw::asView<char>(stdplus::In4Addr{}));
+            }
+            else
+            {
+                auto gateway = stdplus::fromStr<stdplus::In4Addr>(gatewayStr);
+                ret.pack(stdplus::raw::asView<char>(gateway));
+            }
+            return responseSuccess(std::move(ret));
+        }
+        case LanParam::BackupGatewayMAC:
+        {
+            if((set != 0) || (block != 0))
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            auto macStr = channelCall<getBackupGatewayMACAddressProperty>(channel);
+            if(macStr.empty())
+            {
+                ret.pack(stdplus::raw::asView<char>(stdplus::EtherAddr{}));
+            }
+            else
+            {
+                auto mac = stdplus::fromStr<stdplus::EtherAddr>(macStr);
+                ret.pack(stdplus::raw::asView<char>(mac));
+            }
+            return responseSuccess(std::move(ret));
+        }
+
     }
 
     if (parameter >= oemCmdStart)

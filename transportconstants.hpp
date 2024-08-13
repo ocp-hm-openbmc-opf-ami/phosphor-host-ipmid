@@ -44,6 +44,8 @@ enum class LanParam : uint8_t
     GARPInterval = 11,
     Gateway1 = 12,
     Gateway1MAC = 13,
+    BackupGateway=14,
+    BackupGatewayMAC=15,
     VLANId = 20,
     VLANPriority = 21,
     CiphersuiteSupport = 22,
