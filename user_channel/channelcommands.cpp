@@ -76,6 +76,11 @@ RspType<> ipmiSetChannelAccess(Context::ptr ctx, uint4_t channel,
         case doNotSet:
             break;
         case nvData:
+	    getChannelAccessPersistData(chNum, chNVData);
+	    if (chNVData.accessMode != accessMode) {
+		    log<level::DEBUG>("Set channel access - Invalid access set mode");
+		    return response(ccAccessModeNotSupportedForChannel);
+	    }
             chNVData.accessMode = static_cast<uint8_t>(accessMode);
             chNVData.userAuthDisabled = usrAuth;
             chNVData.perMsgAuthDisabled = msgAuth;
@@ -85,6 +90,11 @@ RspType<> ipmiSetChannelAccess(Context::ptr ctx, uint4_t channel,
             break;
 
         case activeData:
+	    getChannelAccessData(chNum, chActData);
+	    if (chActData.accessMode != accessMode) {
+		    log<level::DEBUG>("Set channel access - Invalid access set mode");
+		    return response(ccAccessModeNotSupportedForChannel);
+	    }
             chActData.accessMode = static_cast<uint8_t>(accessMode);
             chActData.userAuthDisabled = usrAuth;
             chActData.perMsgAuthDisabled = msgAuth;
