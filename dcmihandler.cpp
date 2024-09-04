@@ -923,10 +923,7 @@ ipmi::RspType<> setDCMIConfParams(ipmi::Context::ptr& ctx, uint8_t parameter,
             {
                 return ipmi::responseUnspecifiedError();
             }
-            if (activate &&
-                ((dhcpEnabled.value() == EthernetInterface::DHCPConf::v6) ||
-                 (dhcpEnabled.value() ==
-                  EthernetInterface::DHCPConf::v6stateless)))
+            if (activate && (dhcpEnabled.value() == EthernetInterface::DHCPConf::v6stateless))
             {
                 return ipmi::responseCommandNotAvailable();
             }
