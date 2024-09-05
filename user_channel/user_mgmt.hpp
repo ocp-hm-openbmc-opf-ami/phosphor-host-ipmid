@@ -24,7 +24,7 @@
 #include <cstdint>
 #include <ctime>
 #include <variant>
-
+#define DEFAULT_USER "admin"
 namespace ipmi
 {
 

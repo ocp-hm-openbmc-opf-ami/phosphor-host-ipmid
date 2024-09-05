@@ -739,12 +739,16 @@ bool pamUserCheckAuthenticate(std::string_view username,
         return false;
     }
 
-    if (pam_acct_mgmt(localAuthHandle, PAM_DISALLOW_NULL_AUTHTOK) !=
-        PAM_SUCCESS)
-    {
-        pam_end(localAuthHandle, PAM_SUCCESS);
-        return false;
-    }
+     retval = pam_acct_mgmt(localAuthHandle, PAM_DISALLOW_NULL_AUTHTOK);
+        
+     if(retval != PAM_SUCCESS)
+     {
+	     if(!((username == DEFAULT_USER)&&(retval == PAM_NEW_AUTHTOK_REQD)))
+	     {
+		     pam_end(localAuthHandle, PAM_SUCCESS);
+		     return false;
+	     }
+     }
 
     if (pam_end(localAuthHandle, PAM_SUCCESS) != PAM_SUCCESS)
     {
