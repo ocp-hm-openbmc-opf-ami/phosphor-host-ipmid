@@ -16,7 +16,9 @@
 
 #include "dbus-sdr/sdrutils.hpp"
 
+#include <ipmid/utils.hpp>
 #include <nlohmann/json.hpp>
+#include <phosphor-logging/lg2.hpp>
 
 #include <fstream>
 #include <optional>
@@ -35,6 +37,38 @@ extern const IdInfoMap sensors;
 
 #endif
 
+boost::container::flat_map<
+    const char*, std::pair<SensorTypeCodes, SensorEventTypeCodes>, CmpStr>
+    sensorTypes{
+        {{"temperature", std::make_pair(SensorTypeCodes::temperature,
+                                        SensorEventTypeCodes::threshold)},
+         {"voltage", std::make_pair(SensorTypeCodes::voltage,
+                                    SensorEventTypeCodes::threshold)},
+         {"current", std::make_pair(SensorTypeCodes::current,
+                                    SensorEventTypeCodes::threshold)},
+         {"fan_tach", std::make_pair(SensorTypeCodes::fan,
+                                     SensorEventTypeCodes::threshold)},
+         {"fan_pwm", std::make_pair(SensorTypeCodes::fan,
+                                    SensorEventTypeCodes::threshold)},
+         {"intrusion", std::make_pair(SensorTypeCodes::physical_security,
+                                      SensorEventTypeCodes::sensorSpecified)},
+         {"processor", std::make_pair(SensorTypeCodes::processor,
+                                      SensorEventTypeCodes::sensorSpecified)},
+         {"power", std::make_pair(SensorTypeCodes::other,
+                                  SensorEventTypeCodes::threshold)},
+         {"memory", std::make_pair(SensorTypeCodes::memory,
+                                   SensorEventTypeCodes::sensorSpecified)},
+         {"state", std::make_pair(SensorTypeCodes::power_unit,
+                                  SensorEventTypeCodes::sensorSpecified)},
+         {"buttons", std::make_pair(SensorTypeCodes::buttons,
+                                    SensorEventTypeCodes::sensorSpecified)},
+         {"watchdog", std::make_pair(SensorTypeCodes::watchdog2,
+                                     SensorEventTypeCodes::sensorSpecified)},
+         {"entity", std::make_pair(SensorTypeCodes::entity,
+                                   SensorEventTypeCodes::sensorSpecified)},
+         {"energy", std::make_pair(SensorTypeCodes::other,
+                                   SensorEventTypeCodes::threshold)}}};
+
 namespace details
 {
 
@@ -51,8 +85,8 @@ static void filterSensors(SensorSubTree& subtree)
     {
         return;
     }
-    nlohmann::json sensorFilterJSON = nlohmann::json::parse(filterFile, nullptr,
-                                                            false);
+    nlohmann::json sensorFilterJSON =
+        nlohmann::json::parse(filterFile, nullptr, false);
     nlohmann::json::iterator svcFilterit =
         sensorFilterJSON.find("ServiceFilter");
     if (svcFilterit == sensorFilterJSON.end())
@@ -62,15 +96,16 @@ static void filterSensors(SensorSubTree& subtree)
 
     subtree.erase(std::remove_if(subtree.begin(), subtree.end(),
                                  [svcFilterit](SensorSubTree::value_type& kv) {
-        auto& [_, serviceToIfaces] = kv;
+                                     auto& [_, serviceToIfaces] = kv;
 
-        for (auto service = svcFilterit->begin(); service != svcFilterit->end();
-             ++service)
-        {
-            serviceToIfaces.erase(*service);
-        }
-        return serviceToIfaces.empty();
-    }),
+                                     for (auto service = svcFilterit->begin();
+                                          service != svcFilterit->end();
+                                          ++service)
+                                     {
+                                         serviceToIfaces.erase(*service);
+                                     }
+                                     return serviceToIfaces.empty();
+                                 }),
                   subtree.end());
 }
 
@@ -118,10 +153,8 @@ uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
         }
         catch (const sdbusplus::exception_t& e)
         {
-            phosphor::logging::log<phosphor::logging::level::ERR>(
-                "fail to update subtree",
-                phosphor::logging::entry("PATH=%s", path),
-                phosphor::logging::entry("WHAT=%s", e.what()));
+            lg2::error("Failed to update subtree, path: {PATH}, error: {ERROR}",
+                       "PATH", path, "ERROR", e);
             return false;
         }
         if constexpr (debug)
@@ -142,8 +175,8 @@ uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
     static constexpr const std::array vrInterfaces = {
         "xyz.openbmc_project.Control.VoltageRegulatorMode"};
 
-    bool sensorRez = lbdUpdateSensorTree("/xyz/openbmc_project/sensors",
-                                         sensorInterfaces);
+    bool sensorRez =
+        lbdUpdateSensorTree("/xyz/openbmc_project/sensors", sensorInterfaces);
 
 #ifdef FEATURE_HYBRID_SENSORS
 
@@ -259,8 +292,8 @@ ipmi::sensor::IdInfoMap::const_iterator
     return std::find_if(
         ipmi::sensor::sensors.begin(), ipmi::sensor::sensors.end(),
         [&path](const ipmi::sensor::IdInfoMap::value_type& findSensor) {
-        return findSensor.second.sensorPath == path;
-    });
+            return findSensor.second.sensorPath == path;
+        });
 }
 #endif
 
@@ -378,8 +411,8 @@ std::optional<std::map<std::string, std::vector<std::string>>>
     return interfacesResponse;
 }
 
-std::map<std::string, Value> getEntityManagerProperties(const char* path,
-                                                        const char* interface)
+std::map<std::string, Value>
+    getEntityManagerProperties(const char* path, const char* interface)
 {
     std::map<std::string, Value> properties;
     std::shared_ptr<sdbusplus::asio::connection> dbus = getSdBus();
@@ -396,10 +429,9 @@ std::map<std::string, Value> getEntityManagerProperties(const char* path,
     }
     catch (const std::exception& e)
     {
-        phosphor::logging::log<phosphor::logging::level::ERR>(
-            "Failed to GetAll", phosphor::logging::entry("PATH=%s", path),
-            phosphor::logging::entry("INTF=%s", interface),
-            phosphor::logging::entry("WHAT=%s", e.what()));
+        lg2::error("Failed to GetAll, path: {PATH}, interface: {INTERFACE}, "
+                   "error: {ERROR}",
+                   "PATH", path, "INTERFACE", interface, "ERROR", e);
     }
 
     return properties;
@@ -431,8 +463,8 @@ std::optional<std::unordered_set<std::string>>&
         return ipmiDecoratorPaths;
     }
 
-    ipmiDecoratorPaths = std::unordered_set<std::string>(paths.begin(),
-                                                         paths.end());
+    ipmiDecoratorPaths =
+        std::unordered_set<std::string>(paths.begin(), paths.end());
     return ipmiDecoratorPaths;
 }
 
@@ -571,9 +603,8 @@ void updateIpmiFromAssociation(
 
         if (!sensorInterfacesResponseOpt.has_value())
         {
-            phosphor::logging::log<phosphor::logging::level::DEBUG>(
-                "Failed to GetObject",
-                phosphor::logging::entry("PATH=%s", sensorConfigPath.c_str()));
+            lg2::debug("Failed to GetObject, path: {PATH}", "PATH",
+                       sensorConfigPath);
             continue;
         }
 
