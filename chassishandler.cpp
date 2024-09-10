@@ -752,7 +752,7 @@ ipmi::RspType<> ipmiSetChassisCap(
         if ((bridgeDeviceAddr.value() & ~chassisCapAddrMask) != 0)
         {
             lg2::error("Unsupported request parameter(Bridge Addr) for REQ={REQ}",
-                   "REQ", lg2::hex, bridgeDeviceAddr);
+                   "REQ", lg2::hex, bridgeDeviceAddr.value());
             return ipmi::responseInvalidFieldRequest();
         }
     }

@@ -267,9 +267,6 @@ void createIfAddr(sdbusplus::bus_t& bus, const ChannelParams& params,
     auto newreq = bus.new_method_call(params.service.c_str(),
                                       params.logicalPath.c_str(),
                                       INTF_IP_CREATE, "IPWithIndex");
-    /*auto newreq =
-        bus.new_method_call(params.service.c_str(), params.logicalPath.c_str(),
-                            INTF_IP_CREATE, "IP");*/
     std::string protocol =
         sdbusplus::common::xyz::openbmc_project::network::convertForMessage(
             AddrFamily<family>::protocol);
@@ -303,8 +300,7 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
     auto ifaddr = getIfAddr4(bus, params);
     if (!ifaddr && !address)
     {
-        log<level::ERR>("Missing address for IPv4 assignment");
-       // lg2::error("Missing address for IPv4 assignment");
+       lg2::error("Missing address for IPv4 assignment");
         elog<InternalFailure>();
     }
     uint8_t fallbackPrefix = AddrFamily<AF_INET>::defaultPrefix;
@@ -387,8 +383,6 @@ void reconfigureGatewayPrefixLength(sdbusplus::bus_t& bus, const ChannelParams& 
 
     auto mac=neighbor->mac;
 
-    /*auto neighbor =
-        findStaticNeighbor<family>(bus, params, *gateway, neighbors);*/
     if (neighbor)
     {
         deleteObjectIfExists(bus, params.service, neighbor->path);
@@ -619,13 +613,6 @@ uint16_t getVLANPriority(sdbusplus::bus::bus& bus, const ChannelParams& params)
 {
     auto vlan = 0;
     if (params.ifPath == params.logicalPath)
-/*void deconfigureChannel(sdbusplus::bus_t& bus, ChannelParams& params)
-{
-    // Delete all objects associated with the interface
-    ObjectTree objs =
-        ipmi::getSubTree(bus, std::vector<std::string>{DELETE_INTERFACE},
-                         std::string{PATH_ROOT});
-    for (const auto& [path, impls] : objs)*/
     {
         return vlan;
     }
@@ -684,13 +671,6 @@ void createVLAN(sdbusplus::bus::bus& bus, ChannelParams& params, uint16_t vlan)
     if (vlanid == vlan)
     {
         return;
-        /*auto ifaddr6 =
-            findIfAddr<AF_INET6>(bus, params, i, originsV6Static, ips);
-        if (!ifaddr6)
-        {
-            break;
-        }
-        ifaddrs6.push_back(std::move(*ifaddr6));*/
     }
     try
     {
@@ -1035,19 +1015,6 @@ IPv6RouterControlFlag::RACFG_T getIPv6DynamicRouterInfo(sdbusplus::bus::bus& bus
     reply.read(rInfo);
     if (Index < rInfo.size()) {
         return rInfo[rInfo.size()-Index-1];
-    /*const uint8_t channel = convertCurrentChannelNum(
-        static_cast<uint8_t>(channelBits), ctx->channel);
-    if (reserved1 || !isValidChannel(channel))
-    {
-        lg2::error("Set Lan - Invalid field in request");
-        req.trailingOk = true;
-        return responseInvalidFieldRequest();
-    }
-
-    if (!isLanChannel(channel).value_or(false))
-    {
-        lg2::error("Set Lan - Not a LAN channel");
-        return responseInvalidFieldRequest();*/
     }
     return IPv6RouterControlFlag::RACFG_T{};
 }
@@ -1492,10 +1459,6 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseInvalidFieldRequest();
             }
-            /*else if (vlan == 0 || vlan == VLAN_VALUE_MASK)
-            {
-                return responseInvalidFieldRequest();
-            }*/
 
             if (channelCall<setVLANPriority>(channel, (uint32_t)vlanPriority) ==
                 0)
@@ -2423,7 +2386,6 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
                 }
             }
             ret.pack(uint8_t(prefixLength));
-            //ret.pack(uint8_t{0});
             return responseSuccess(std::move(ret));
         }
         case LanParam::IPv6StaticRouter1PrefixValue:

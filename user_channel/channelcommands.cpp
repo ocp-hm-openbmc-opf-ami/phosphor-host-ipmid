@@ -76,7 +76,7 @@ RspType<> ipmiSetChannelAccess(
         case nvData:
 	    getChannelAccessPersistData(chNum, chNVData);
 	    if (chNVData.accessMode != accessMode) {
-		    log<level::DEBUG>("Set channel access - Invalid access set mode");
+		    lg2::debug("Set channel access - Invalid access set mode");
 		    return response(ccAccessModeNotSupportedForChannel);
 	    }
             chNVData.accessMode = static_cast<uint8_t>(accessMode);
@@ -90,7 +90,7 @@ RspType<> ipmiSetChannelAccess(
         case activeData:
 	    getChannelAccessData(chNum, chActData);
 	    if (chActData.accessMode != accessMode) {
-		    log<level::DEBUG>("Set channel access - Invalid access set mode");
+		    lg2::debug("Set channel access - Invalid access set mode");
 		    return response(ccAccessModeNotSupportedForChannel);
 	    }
             chActData.accessMode = static_cast<uint8_t>(accessMode);
@@ -338,7 +338,7 @@ RspType<uint16_t, // stdPayloadType
 
     if (!doesDeviceExist(chNum))
     {
-        log<level::DEBUG>("Get channel payload - device does not exist");
+        lg2::debug("Get channel payload - device does not exist");
         return responseInvalidFieldRequest();
     }
 
