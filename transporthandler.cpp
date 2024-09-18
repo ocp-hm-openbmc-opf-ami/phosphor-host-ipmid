@@ -1663,6 +1663,15 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 return responseCommandNotAvailable();
             }
             
+            std::string routerAddr;
+            if (IPv6RouterControlFlag::StaticControl)
+            {
+                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtrAddr");
+                if(routerAddr.empty()){
+                    return responseCommandNotAvailable();
+                }
+            }
+            
             channelCall<reconfigureGatewayMAC<AF_INET6>>(channel, "IPv6StaticRtrAddr", mac);
             return responseSuccess();
         }
@@ -1679,6 +1688,16 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseCommandNotAvailable();
             }
+
+            std::string routerAddr;
+            if (IPv6RouterControlFlag::StaticControl)
+            {
+                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtrAddr");
+                if(routerAddr.empty()){
+                    return responseCommandNotAvailable();
+                }
+            }
+
             if (prefix > MAX_IPV6_PREFIX_LENGTH)
             {
                 return responseInvalidFieldRequest();
@@ -1757,6 +1776,15 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 return responseCommandNotAvailable();
             }
 
+            std::string routerAddr;
+            if (IPv6RouterControlFlag::StaticControl)
+            {
+                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
+                if(routerAddr.empty()){
+                    return responseCommandNotAvailable();
+                }
+            }
+
             channelCall<reconfigureGatewayMAC<AF_INET6>>(channel, "IPv6StaticRtr2Addr", mac);
             return responseSuccess();
         }
@@ -1773,6 +1801,16 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseCommandNotAvailable();
             }
+
+            std::string routerAddr;
+            if (IPv6RouterControlFlag::StaticControl)
+            {
+                routerAddr = channelCall<getStaticRtrAddr<AF_INET6>>(channel,"IPv6StaticRtr2Addr");
+                if(routerAddr.empty()){
+                    return responseCommandNotAvailable();
+                }
+            }
+
             if (prefix > MAX_IPV6_PREFIX_LENGTH)
             {
                 return responseInvalidFieldRequest();
