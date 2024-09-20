@@ -10,6 +10,7 @@
 #include <ipmid/utils.hpp>
 #include <nlohmann/json.hpp>
 #include <sdbusplus/bus.hpp>
+#include <phosphor-logging/lg2.hpp>
 
 #include <bitset>
 #include <cstring>
@@ -202,17 +203,15 @@ ipmi::RspType<> ipmiAppSetBMCGlobalEnable(ipmi::Context::ptr ctx,
 
     if (ipmi::getChannelInfo(ctx->channel, chInfo) != ipmi::ccSuccess)
     {
-        phosphor::logging::log<phosphor::logging::level::ERR>(
-            "Failed to get Channel Info",
-            phosphor::logging::entry("CHANNEL=%d", ctx->channel));
+        lg2::error("Failed to get Channel Info, channel={CHANNEL}", "CHANNEL",
+                   ctx->channel);
         return ipmi::responseUnspecifiedError();
     }
 
     if (chInfo.mediumType !=
         static_cast<uint8_t>(ipmi::EChannelMediumType::systemInterface))
     {
-        phosphor::logging::log<phosphor::logging::level::ERR>(
-            "Error - supported only in system interface");
+        lg2::error("Error - supported only in system interface");
         return ipmi::responseCommandNotAvailable();
     }
 
@@ -315,8 +314,8 @@ void register_netfn_app_functions()
     objManager = std::make_unique<sdbusplus::server::manager_t>(
         *sdbusp, CONTROL_HOST_OBJ_MGR);
 
-    host = std::make_unique<phosphor::host::command::Host>(*sdbusp,
-                                                           objPath.c_str());
+    host = std::make_unique<phosphor::host::command::Host>(
+        *sdbusp, objPath.c_str());
     sdbusp->request_name(CONTROL_HOST_BUSNAME);
 
     return;

@@ -38,7 +38,8 @@ owners:
 reviewers:
 - anoo@us.ibm.com
 - deepak.kodihalli.83@gmail.com
-- ratagupt@linux.vnet.ibm.com
+- liuxiwei@ieisystem.com
+- ratankgupta31@gmail.com
 
 matchers:
 
@@ -49,8 +50,11 @@ openbmc:
 - name: Deepak Kodihalli
   email: deepak.kodihalli.83@gmail.com
   discord: dkodihal
+- name: George Liu
+  email: liuxiwei@ieisystem.com
+  discord: George Liu
 - name: Ratan Gupta
-  email: ratagupt@linux.vnet.ibm.com
+  email: ratankgupta31@gmail.com
   discord: rgupta
 - name: Tom Joseph
   email: rushtotom@gmail.com

@@ -21,7 +21,7 @@
 #include <ipmid/utils.hpp>
 #include <nlohmann/json.hpp>
 #include <phosphor-logging/elog-errors.hpp>
-#include <phosphor-logging/log.hpp>
+#include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/message/types.hpp>
 #include <sys_info_param.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
@@ -118,24 +118,24 @@ std::string getActiveSoftwareVersionInfo(ipmi::Context::ptr ctx)
     ipmi::ObjectTree objectTree;
     try
     {
-        objectTree = ipmi::getAllDbusObjects(*ctx->bus, softwareRoot,
-                                             redundancyIntf);
+        objectTree =
+            ipmi::getAllDbusObjects(*ctx->bus, softwareRoot, redundancyIntf);
     }
     catch (const sdbusplus::exception_t& e)
     {
-        log<level::ERR>("Failed to fetch redundancy object from dbus",
-                        entry("INTERFACE=%s", redundancyIntf),
-                        entry("ERRMSG=%s", e.what()));
+        lg2::error("Failed to fetch redundancy object from dbus, "
+                   "interface: {INTERFACE},  error: {ERROR}",
+                   "INTERFACE", redundancyIntf, "ERROR", e);
         elog<InternalFailure>();
     }
 
     auto objectFound = false;
     for (auto& softObject : objectTree)
     {
-        auto service = ipmi::getService(*ctx->bus, redundancyIntf,
-                                        softObject.first);
-        auto objValueTree = ipmi::getManagedObjects(*ctx->bus, service,
-                                                    softwareRoot);
+        auto service =
+            ipmi::getService(*ctx->bus, redundancyIntf, softObject.first);
+        auto objValueTree =
+            ipmi::getManagedObjects(*ctx->bus, service, softwareRoot);
 
         auto minPriority = 0xFF;
         for (const auto& objIter : objValueTree)
@@ -169,14 +169,14 @@ std::string getActiveSoftwareVersionInfo(ipmi::Context::ptr ctx)
             }
             catch (const std::exception& e)
             {
-                log<level::ERR>(e.what());
+                lg2::error("error message: {ERROR}", "ERROR", e);
             }
         }
     }
 
     if (!objectFound)
     {
-        log<level::ERR>("Could not found an BMC software Object");
+        lg2::error("Could not found an BMC software Object");
         elog<InternalFailure>();
     }
 
@@ -188,11 +188,11 @@ bool getCurrentBmcState()
     sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
 
     // Get the Inventory object implementing the BMC interface
-    ipmi::DbusObjectInfo bmcObject = ipmi::getDbusObject(bus,
-                                                         bmc_state_interface);
-    auto variant = ipmi::getDbusProperty(bus, bmcObject.second, bmcObject.first,
-                                         bmc_state_interface,
-                                         bmc_state_property);
+    ipmi::DbusObjectInfo bmcObject =
+        ipmi::getDbusObject(bus, bmc_state_interface);
+    auto variant =
+        ipmi::getDbusProperty(bus, bmcObject.second, bmcObject.first,
+                              bmc_state_interface, bmc_state_property);
 
     return std::holds_alternative<std::string>(variant) &&
            BMC::convertBMCStateFromString(std::get<std::string>(variant)) ==
@@ -217,8 +217,6 @@ namespace acpi_state
 {
 using namespace sdbusplus::server::xyz::openbmc_project::control::power;
 
-const static constexpr char* acpiObjPath =
-    "/xyz/openbmc_project/control/host0/acpi_power_state";
 const static constexpr char* acpiInterface =
     "xyz.openbmc_project.Control.Power.ACPIPowerState";
 const static constexpr char* sysACPIProp = "SysACPIStatus";
@@ -330,15 +328,14 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
         if (!acpi_state::isValidACPIState(
                 acpi_state::PowerStateType::sysPowerState, s))
         {
-            log<level::ERR>("set_acpi_power sys invalid input",
-                            entry("S=%x", s));
+            lg2::error("set_acpi_power sys invalid input, S: {S}", "S", s);
             return ipmi::responseParmOutOfRange();
         }
 
         // valid input
         if (s == static_cast<uint8_t>(acpi_state::PowerState::noChange))
         {
-            log<level::DEBUG>("No change for system power state");
+            lg2::debug("No change for system power state");
         }
         else
         {
@@ -361,15 +358,15 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
             }
             catch (const InternalFailure& e)
             {
-                log<level::ERR>("Failed in set ACPI system property",
-                                entry("EXCEPTION=%s", e.what()));
+                lg2::error("Failed in set ACPI system property: {ERROR}",
+                           "ERROR", e);
                 return ipmi::responseUnspecifiedError();
             }
         }
     }
     else
     {
-        log<level::DEBUG>("Do not change system power state");
+        lg2::debug("Do not change system power state");
     }
 
     if (devAcpiState & acpi_state::stateChanged)
@@ -379,15 +376,14 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
         if (!acpi_state::isValidACPIState(
                 acpi_state::PowerStateType::devPowerState, s))
         {
-            log<level::ERR>("set_acpi_power dev invalid input",
-                            entry("S=%x", s));
+            lg2::error("set_acpi_power dev invalid input, S: {S}", "S", s);
             return ipmi::responseParmOutOfRange();
         }
 
         // valid input
         if (s == static_cast<uint8_t>(acpi_state::PowerState::noChange))
         {
-            log<level::DEBUG>("No change for device power state");
+            lg2::debug("No change for device power state");
         }
         else
         {
@@ -410,15 +406,15 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
             }
             catch (const InternalFailure& e)
             {
-                log<level::ERR>("Failed in set ACPI device property",
-                                entry("EXCEPTION=%s", e.what()));
+                lg2::error("Failed in set ACPI device property: {ERROR}",
+                           "ERROR", e);
                 return ipmi::responseUnspecifiedError();
             }
         }
     }
     else
     {
-        log<level::DEBUG>("Do not change device power state");
+        lg2::debug("Do not change device power state");
     }
     return ipmi::responseSuccess();
 }
@@ -649,7 +645,7 @@ ipmi::RspType<uint8_t,  // Device ID
         }
         catch (const std::exception& e)
         {
-            log<level::ERR>(e.what());
+            lg2::error("error message: {ERROR}", "ERROR", e);
         }
 
         if (r >= 0)
@@ -714,13 +710,13 @@ ipmi::RspType<uint8_t,  // Device ID
             }
             else
             {
-                log<level::ERR>("Device ID JSON parser failure");
+                lg2::error("Device ID JSON parser failure");
                 return ipmi::responseUnspecifiedError();
             }
         }
         else
         {
-            log<level::ERR>("Device ID file not found");
+            lg2::error("Device ID file not found");
             return ipmi::responseUnspecifiedError();
         }
     }
@@ -858,14 +854,13 @@ auto ipmiAppGetSystemGuid(ipmi::Context::ptr& ctx)
 
     // Get the Inventory object implementing BMC interface
     ipmi::DbusObjectInfo objectInfo{};
-    boost::system::error_code ec = ipmi::getDbusObject(ctx, uuidInterface,
-                                                       objectInfo);
+    boost::system::error_code ec =
+        ipmi::getDbusObject(ctx, uuidInterface, objectInfo);
     if (ec.value())
     {
-        log<level::ERR>("Failed to locate System UUID object",
-                        entry("INTERFACE=%s", uuidInterface),
-                        entry("ERROR=%s", ec.message().c_str()));
-        return ipmi::responseUnspecifiedError();
+        lg2::error("Failed to locate System UUID object, "
+                   "interface: {INTERFACE}, error: {ERROR}",
+                   "INTERFACE", uuidInterface, "ERROR", ec.message());
     }
 
     // Read UUID property value from bmcObject
@@ -875,10 +870,11 @@ auto ipmiAppGetSystemGuid(ipmi::Context::ptr& ctx)
                                uuidInterface, uuidProperty, rfc4122Uuid);
     if (ec.value())
     {
-        log<level::ERR>("Failed in reading BMC UUID property",
-                        entry("INTERFACE=%s", uuidInterface),
-                        entry("PROPERTY=%s", uuidProperty),
-                        entry("ERROR=%s", ec.message().c_str()));
+        lg2::error("Failed to read System UUID property, "
+                   "interface: {INTERFACE}, property: {PROPERTY}, "
+                   "error: {ERROR}",
+                   "INTERFACE", uuidInterface, "PROPERTY", uuidProperty,
+                   "ERROR", ec.message());
         return ipmi::responseUnspecifiedError();
     }
     std::array<uint8_t, 16> uuid;
@@ -889,10 +885,11 @@ auto ipmiAppGetSystemGuid(ipmi::Context::ptr& ctx)
     }
     catch (const InvalidArgument& e)
     {
-        log<level::ERR>("Failed in parsing BMC UUID property",
-                        entry("INTERFACE=%s", uuidInterface),
-                        entry("PROPERTY=%s", uuidProperty),
-                        entry("VALUE=%s", rfc4122Uuid.c_str()));
+        lg2::error("Failed in parsing BMC UUID property, "
+                   "interface: {INTERFACE}, property: {PROPERTY}, "
+                   "value: {VALUE}, error: {ERROR}",
+                   "INTERFACE", uuidInterface, "PROPERTY", uuidProperty,
+                   "VALUE", rfc4122Uuid, "ERROR", e);
         return ipmi::responseUnspecifiedError();
     }
     return ipmi::responseSuccess(uuid);
@@ -929,10 +926,11 @@ uint8_t setSessionState(std::shared_ptr<sdbusplus::asio::connection>& busp,
     }
     catch (const std::exception& e)
     {
-        log<level::ERR>("Failed in getting session state property",
-                        entry("service=%s", service.c_str()),
-                        entry("object path=%s", obj.c_str()),
-                        entry("interface=%s", session::sessionIntf));
+        lg2::error("Failed in getting session state property, "
+                   "service: {SERVICE}, object path: {OBJECT_PATH}, "
+                   "interface: {INTERFACE}, error: {ERROR}",
+                   "SERVICE", service, "OBJECT_PATH", obj, "INTERFACE",
+                   session::sessionIntf, "ERROR", e);
         return ipmi::ccUnspecifiedError;
     }
 
@@ -995,9 +993,9 @@ ipmi::RspType<> ipmiAppCloseSession(uint32_t reqSessionId,
     }
     catch (const sdbusplus::exception_t& e)
     {
-        log<level::ERR>("Failed to fetch object from dbus",
-                        entry("INTERFACE=%s", session::sessionIntf),
-                        entry("ERRMSG=%s", e.what()));
+        lg2::error("Failed to fetch object from dbus, "
+                   "interface: {INTERFACE}, error: {ERROR}",
+                   "INTERFACE", session::sessionIntf, "ERROR", e);
         return ipmi::responseUnspecifiedError();
     }
 
@@ -1038,11 +1036,10 @@ uint8_t getTotalSessionCount()
  * @return success completion code if request data is valid
  * else return the correcponding error completion code.
  **/
-uint8_t getSessionInfoRequestData(const ipmi::Context::ptr ctx,
-                                  const uint8_t sessionIndex,
-                                  ipmi::message::Payload& payload,
-                                  uint32_t& reqSessionId,
-                                  uint8_t& reqSessionHandle)
+uint8_t getSessionInfoRequestData(
+    const ipmi::Context::ptr ctx, const uint8_t sessionIndex,
+    ipmi::message::Payload& payload, uint32_t& reqSessionId,
+    uint8_t& reqSessionHandle)
 {
     if ((sessionIndex > session::maxSessionCountPerChannel) &&
         (sessionIndex < session::searchSessionByHandle))
@@ -1121,11 +1118,11 @@ uint8_t getSessionState(ipmi::Context::ptr ctx, const std::string& service,
         ctx, service, objPath, session::sessionIntf, "State", sessionState);
     if (ec)
     {
-        log<level::ERR>("Failed to fetch state property ",
-                        entry("SERVICE=%s", service.c_str()),
-                        entry("OBJECTPATH=%s", objPath.c_str()),
-                        entry("INTERFACE=%s", session::sessionIntf),
-                        entry("ERRMSG=%s", ec.message().c_str()));
+        lg2::error("Failed to fetch state property, service: {SERVICE}, "
+                   "object path: {OBJECTPATH}, interface: {INTERFACE}, "
+                   "error: {ERROR}",
+                   "SERVICE", service, "OBJECTPATH", objPath, "INTERFACE",
+                   session::sessionIntf, "ERROR", ec.message());
         return ipmi::ccUnspecifiedError;
     }
     return ipmi::ccSuccess;
@@ -1170,11 +1167,11 @@ ipmi::Cc getSessionDetails(ipmi::Context::ptr ctx, const std::string& service,
 
     if (ec)
     {
-        log<level::ERR>("Failed to fetch state property ",
-                        entry("SERVICE=%s", service.c_str()),
-                        entry("OBJECTPATH=%s", objPath.c_str()),
-                        entry("INTERFACE=%s", session::sessionIntf),
-                        entry("ERRMSG=%s", ec.message().c_str()));
+        lg2::error("Failed to fetch state property, service: {SERVICE}, "
+                   "object path: {OBJECTPATH}, interface: {INTERFACE}, "
+                   "error: {ERROR}",
+                   "SERVICE", service, "OBJECTPATH", objPath, "INTERFACE",
+                   session::sessionIntf, "ERROR", ec.message());
         return ipmi::ccUnspecifiedError;
     }
 
@@ -1182,23 +1179,23 @@ ipmi::Cc getSessionDetails(ipmi::Context::ptr ctx, const std::string& service,
         sessionProps, "State", static_cast<uint8_t>(session::State::inactive));
     if (sessionState == static_cast<uint8_t>(session::State::active))
     {
-        sessionHandle = ipmi::mappedVariant<uint8_t>(sessionProps,
-                                                     "SessionHandle", 0);
-        std::get<0>(details) = ipmi::mappedVariant<uint8_t>(sessionProps,
-                                                            "UserID", 0xff);
+        sessionHandle =
+            ipmi::mappedVariant<uint8_t>(sessionProps, "SessionHandle", 0);
+        std::get<0>(details) =
+            ipmi::mappedVariant<uint8_t>(sessionProps, "UserID", 0xff);
         // std::get<1>(details) = 0; // (default constructed to 0)
         std::get<2>(details) =
             ipmi::mappedVariant<uint8_t>(sessionProps, "CurrentPrivilege", 0);
         // std::get<3>(details) = 0; // (default constructed to 0)
-        std::get<4>(details) = ipmi::mappedVariant<uint8_t>(sessionProps,
-                                                            "ChannelNum", 0xff);
+        std::get<4>(details) =
+            ipmi::mappedVariant<uint8_t>(sessionProps, "ChannelNum", 0xff);
         constexpr uint4_t rmcpPlusProtocol = 1;
         std::get<5>(details) = rmcpPlusProtocol;
-        std::get<6>(details) = ipmi::mappedVariant<uint32_t>(sessionProps,
-                                                             "RemoteIPAddr", 0);
+        std::get<6>(details) =
+            ipmi::mappedVariant<uint32_t>(sessionProps, "RemoteIPAddr", 0);
         // std::get<7>(details) = {{0}}; // default constructed to all 0
-        std::get<8>(details) = ipmi::mappedVariant<uint16_t>(sessionProps,
-                                                             "RemotePort", 0);
+        std::get<8>(details) =
+            ipmi::mappedVariant<uint16_t>(sessionProps, "RemotePort", 0);
     }
 
     return ipmi::ccSuccess;
@@ -1228,9 +1225,9 @@ ipmi::RspType<uint8_t, // session handle,
         ctx, session::sessionManagerRootPath, session::sessionIntf, objectTree);
     if (ec)
     {
-        log<level::ERR>("Failed to fetch object from dbus",
-                        entry("INTERFACE=%s", session::sessionIntf),
-                        entry("ERRMSG=%s", ec.message().c_str()));
+        lg2::error("Failed to fetch object from dbus, "
+                   "interface: {INTERFACE}, error: {ERROR}",
+                   "INTERFACE", session::sessionIntf, "ERROR", ec.message());
         return ipmi::responseUnspecifiedError();
     }
 
@@ -1261,8 +1258,8 @@ ipmi::RspType<uint8_t, // session handle,
 
         std::string service = itr->first;
         uint8_t sessionState = 0;
-        completionCode = getSessionState(ctx, service, objectPath,
-                                         sessionState);
+        completionCode =
+            getSessionState(ctx, service, objectPath, sessionState);
         if (completionCode)
         {
             return ipmi::response(completionCode);
@@ -1322,19 +1319,14 @@ static constexpr uint8_t maxValidEncodingData = 0x02;
 
 static constexpr uint8_t setComplete = 0x0;
 static constexpr uint8_t setInProgress = 0x1;
-static constexpr uint8_t commitWrite = 0x2;
 static uint8_t transferStatus = setComplete;
 
 static constexpr uint8_t configDataOverhead = 2;
-
-// For EFI based system, 256 bytes is recommended.
-static constexpr size_t maxBytesPerParameter = 256;
 
 namespace ipmi
 {
 constexpr Cc ccParmNotSupported = 0x80;
 constexpr Cc ccSetInProgressActive = 0x81;
-constexpr Cc ccSystemInfoParameterSetReadOnly = 0x82;
 
 static inline auto responseParmNotSupported()
 {
@@ -1343,10 +1335,6 @@ static inline auto responseParmNotSupported()
 static inline auto responseSetInProgressActive()
 {
     return response(ccSetInProgressActive);
-}
-static inline auto responseSystemInfoParameterSetReadOnly()
-{
-    return response(ccSystemInfoParameterSetReadOnly);
 }
 } // namespace ipmi
 
@@ -1467,8 +1455,7 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
         // only following 2 states are supported
         if (data1 > setInProgress)
         {
-            phosphor::logging::log<phosphor::logging::level::ERR>(
-                "illegal SetInProgress status");
+            lg2::error("illegal SetInProgress status");
             return ipmi::responseInvalidFieldRequest();
         }
 
@@ -1510,10 +1497,6 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
         }
 	globalEncoding.globalencoding = encoding;
         size_t stringLen = configData.at(1); // string length
-        // maxBytesPerParamter is 256. It will always be greater than stringLen
-        // (unit8_t) if maxBytes changes in future, then following line is
-        // needed.
-        // stringLen = std::min(stringLen, maxBytesPerParameter);
         count = std::min(stringLen, smallChunkSize);
         count = std::min(count, configData.size());
         paramString.resize(stringLen); // reserve space
@@ -1565,9 +1548,8 @@ static bool populateI2CControllerWRAllowlist()
 
     if (!jsonFile.good())
     {
-        log<level::WARNING>(
-            "i2c allow list file not found!",
-            entry("FILE_NAME: %s", i2cControllerWRAllowlistFile));
+        lg2::warning("i2c allow list file not found! file name: {FILE_NAME}",
+                     "FILE_NAME", i2cControllerWRAllowlistFile);
         return false;
     }
 
@@ -1577,9 +1559,9 @@ static bool populateI2CControllerWRAllowlist()
     }
     catch (const nlohmann::json::parse_error& e)
     {
-        log<level::ERR>("Corrupted i2c allow list config file",
-                        entry("FILE_NAME: %s", i2cControllerWRAllowlistFile),
-                        entry("MSG: %s", e.what()));
+        lg2::error("Corrupted i2c allow list config file, "
+                   "file name: {FILE_NAME}, error: {ERROR}",
+                   "FILE_NAME", i2cControllerWRAllowlistFile, "ERROR", e);
         return false;
     }
 
@@ -1613,9 +1595,10 @@ static bool populateI2CControllerWRAllowlist()
             nlohmann::json filter = it.value();
             if (filter.is_null())
             {
-                log<level::ERR>(
-                    "Corrupted I2C controller write read allowlist config file",
-                    entry("FILE_NAME: %s", i2cControllerWRAllowlistFile));
+                lg2::error(
+                    "Corrupted I2C controller write read allowlist config file, "
+                    "file name: {FILE_NAME}",
+                    "FILE_NAME", i2cControllerWRAllowlistFile);
                 return false;
             }
             const std::vector<uint8_t>& writeData =
@@ -1624,8 +1607,8 @@ static bool populateI2CControllerWRAllowlist()
                 convertStringToData(filter[cmdMaskStr].get<std::string>());
             if (writeDataMask.size() != writeData.size())
             {
-                log<level::ERR>("I2C controller write read allowlist filter "
-                                "mismatch for command & mask size");
+                lg2::error("I2C controller write read allowlist filter "
+                           "mismatch for command & mask size");
                 return false;
             }
             allowlist.push_back(
@@ -1641,16 +1624,16 @@ static bool populateI2CControllerWRAllowlist()
         }
         if (allowlist.size() != filters.size())
         {
-            log<level::ERR>(
+            lg2::error(
                 "I2C controller write read allowlist filter size mismatch");
             return false;
         }
     }
     catch (const std::exception& e)
     {
-        log<level::ERR>(
-            "I2C controller write read allowlist unexpected exception",
-            entry("ERROR=%s", e.what()));
+        lg2::error("I2C controller write read allowlist "
+                   "unexpected exception: {ERROR}",
+                   "ERROR", e);
         return false;
     }
     return true;
@@ -1698,8 +1681,7 @@ static bool isCmdAllowlisted(uint8_t busId, uint8_t targetAddr,
 #else
 static bool populateI2CControllerWRAllowlist()
 {
-    log<level::INFO>(
-        "I2C_WHITELIST_CHECK is disabled, do not populate allowlist");
+    lg2::info("I2C_WHITELIST_CHECK is disabled, do not populate allowlist");
     return true;
 }
 #endif // ENABLE_I2C_WHITELIST_CHECK
@@ -1717,11 +1699,10 @@ static bool populateI2CControllerWRAllowlist()
  *  @returns IPMI completion code plus response data
  *   - readData - i2c response data
  */
-ipmi::RspType<std::vector<uint8_t>>
-    ipmiControllerWriteRead([[maybe_unused]] bool isPrivateBus, uint3_t busId,
-                            [[maybe_unused]] uint4_t channelNum, bool reserved,
-                            uint7_t targetAddr, uint8_t readCount,
-                            std::vector<uint8_t> writeData)
+ipmi::RspType<std::vector<uint8_t>> ipmiControllerWriteRead(
+    [[maybe_unused]] bool isPrivateBus, uint3_t busId,
+    [[maybe_unused]] uint4_t channelNum, bool reserved, uint7_t targetAddr,
+    uint8_t readCount, std::vector<uint8_t> writeData)
 {
     if (reserved)
     {
@@ -1730,23 +1711,22 @@ ipmi::RspType<std::vector<uint8_t>>
     const size_t writeCount = writeData.size();
     if (!readCount && !writeCount)
     {
-        log<level::ERR>(
-            "Controller write read command: Read & write count are 0");
+        lg2::error("Controller write read command: Read & write count are 0");
         return ipmi::responseInvalidFieldRequest();
     }
 #ifdef ENABLE_I2C_WHITELIST_CHECK
     if (!isCmdAllowlisted(static_cast<uint8_t>(busId),
                           static_cast<uint8_t>(targetAddr), writeData))
     {
-        log<level::ERR>("Controller write read request blocked!",
-                        entry("BUS=%d", static_cast<uint8_t>(busId)),
-                        entry("ADDR=0x%x", static_cast<uint8_t>(targetAddr)));
-        return ipmi::responseInvalidFieldRequest();
+        lg2::error("Controller write read request blocked!, "
+                   "bus: {BUS}, addr: {ADDR}",
+                   "BUS", static_cast<uint8_t>(busId), "ADDR", lg2::hex,
+                   static_cast<uint8_t>(targetAddr));
     }
 #endif // ENABLE_I2C_WHITELIST_CHECK
     std::vector<uint8_t> readBuf(readCount);
-    std::string i2cBus = "/dev/i2c-" +
-                         std::to_string(static_cast<uint8_t>(busId));
+    std::string i2cBus =
+        "/dev/i2c-" + std::to_string(static_cast<uint8_t>(busId));
 
     ipmi::Cc ret = ipmi::i2cWriteRead(i2cBus, static_cast<uint8_t>(targetAddr),
                                       writeData, readBuf);

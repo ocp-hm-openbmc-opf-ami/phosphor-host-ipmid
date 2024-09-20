@@ -6,6 +6,7 @@
 #include <ipmid/types.hpp>
 #include <ipmid/utils.hpp>
 #include <phosphor-logging/elog-errors.hpp>
+#include <phosphor-logging/lg2.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
 
 #include <charconv>
@@ -133,7 +134,7 @@ void constructSEL(uint8_t recordType, std::chrono::milliseconds timestamp,
 {
     if (recordType != systemEventRecord)
     {
-        log<level::ERR>("Invalid recordType");
+        lg2::error("Invalid recordType");
         elog<InternalFailure>();
     }
 
@@ -198,8 +199,8 @@ GetSELEntryResponse
     }
     catch (const std::exception& e)
     {
-        log<level::ERR>("Error in reading logging property entries",
-                        entry("ERROR=%s", e.what()));
+        lg2::error("Error in reading logging property entries: {ERROR}",
+                   "ERROR", e);
         elog<InternalFailure>();
     }
 
@@ -208,7 +209,7 @@ GetSELEntryResponse
     auto iterId = entryData.find(propId);
     if (iterId == entryData.end())
     {
-        log<level::ERR>("Error in reading Id of logging entry");
+        lg2::error("Error in reading Id of logging entry");
         elog<InternalFailure>();
     }
 
@@ -217,7 +218,7 @@ GetSELEntryResponse
     auto iterTimeStamp = entryData.find(propTimeStamp);
     if (iterTimeStamp == entryData.end())
     {
-        log<level::ERR>("Error in reading Timestamp of logging entry");
+        lg2::error("Error in reading Timestamp of logging entry");
         elog<InternalFailure>();
     }
     std::chrono::milliseconds chronoTimeStamp(
@@ -250,7 +251,7 @@ GetSELEntryResponse
             // invSensor
             if (iter == invSensors.end())
             {
-                log<level::ERR>("System event sensor not found");
+                lg2::error("System event sensor not found");
                 elog<InternalFailure>();
             }
         }
@@ -288,15 +289,15 @@ GetSELEntryResponse
         auto iterResolved = entryData.find(propResolved);
         if (iterResolved == entryData.end())
         {
-            log<level::ERR>("Error in reading Resolved field of logging entry");
+            lg2::error("Error in reading Resolved field of logging entry");
             elog<InternalFailure>();
         }
 
         // Evaluate if the event is assertion or deassertion event
         if (std::get<bool>(iterResolved->second))
         {
-            record.event.eventRecord.eventType = deassertEvent |
-                                                 iter->second.eventReadingType;
+            record.event.eventRecord.eventType =
+                deassertEvent | iter->second.eventReadingType;
         }
         else
         {
@@ -317,31 +318,20 @@ GetSELEntryResponse convertLogEntrytoSEL(const std::string& objPath)
         "xyz.openbmc_project.Association.Definitions";
     static constexpr auto assocProp = "Associations";
 
-    auto service = ipmi::getService(bus, assocIntf, objPath);
-
-    // Read the Associations interface.
-    auto methodCall = bus.new_method_call(service.c_str(), objPath.c_str(),
-                                          propIntf, "Get");
-    methodCall.append(assocIntf);
-    methodCall.append(assocProp);
-
-    using AssociationList =
-        std::vector<std::tuple<std::string, std::string, std::string>>;
-
-    std::variant<AssociationList> list;
+    std::vector<ipmi::Association> assocs;
     try
     {
-        auto reply = bus.call(methodCall);
-        reply.read(list);
+        auto service = ipmi::getService(bus, assocIntf, objPath);
+        auto propValue =
+            ipmi::getDbusProperty(bus, service, objPath, assocIntf, assocProp);
+        assocs = std::get<std::vector<ipmi::Association>>(propValue);
     }
     catch (const std::exception& e)
     {
-        log<level::ERR>("Error in reading Associations interface",
-                        entry("ERROR=%s", e.what()));
+        lg2::error("Error in reading Associations interface: {ERROR}", "ERROR",
+                   e);
         elog<InternalFailure>();
     }
-
-    auto& assocs = std::get<AssociationList>(list);
 
     /*
      * Check if the log entry has any callout associations, if there is a
@@ -358,7 +348,7 @@ GetSELEntryResponse convertLogEntrytoSEL(const std::string& objPath)
                 iter = invSensors.find(BOARD_SENSOR);
                 if (iter == invSensors.end())
                 {
-                    log<level::ERR>("Motherboard sensor not found");
+                    lg2::error("Motherboard sensor not found");
                     elog<InternalFailure>();
                 }
             }
@@ -377,30 +367,24 @@ std::chrono::seconds getEntryTimeStamp(const std::string& objPath)
 {
     sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
 
-    auto service = ipmi::getService(bus, logEntryIntf, objPath);
+    static constexpr auto propTimeStamp = "Timestamp";
 
-    using namespace std::string_literals;
-    static const auto propTimeStamp = "Timestamp"s;
-
-    auto methodCall = bus.new_method_call(service.c_str(), objPath.c_str(),
-                                          propIntf, "Get");
-    methodCall.append(logEntryIntf);
-    methodCall.append(propTimeStamp);
-
-    std::variant<uint64_t> timeStamp;
+    uint64_t timeStamp;
     try
     {
-        auto reply = bus.call(methodCall);
-        reply.read(timeStamp);
+        auto service = ipmi::getService(bus, logEntryIntf, objPath);
+        auto propValue = ipmi::getDbusProperty(bus, service, objPath,
+                                               logEntryIntf, propTimeStamp);
+        timeStamp = std::get<uint64_t>(propValue);
     }
     catch (const std::exception& e)
     {
-        log<level::ERR>("Error in reading Timestamp from Entry interface",
-                        entry("ERROR=%s", e.what()));
+        lg2::error("Error in reading Timestamp from Entry interface: {ERROR}",
+                   "ERROR", e);
         elog<InternalFailure>();
     }
 
-    std::chrono::milliseconds chronoTimeStamp(std::get<uint64_t>(timeStamp));
+    std::chrono::milliseconds chronoTimeStamp(timeStamp);
 
     return std::chrono::duration_cast<std::chrono::seconds>(chronoTimeStamp);
 }
@@ -433,14 +417,14 @@ void readLoggingObjectPaths(ObjectPaths& paths)
 
     std::sort(paths.begin(), paths.end(),
               [](const std::string& a, const std::string& b) {
-        namespace fs = std::filesystem;
-        fs::path pathA(a);
-        fs::path pathB(b);
-        auto idA = std::stoul(pathA.filename().string());
-        auto idB = std::stoul(pathB.filename().string());
+                  namespace fs = std::filesystem;
+                  fs::path pathA(a);
+                  fs::path pathB(b);
+                  auto idA = std::stoul(pathA.filename().string());
+                  auto idB = std::stoul(pathB.filename().string());
 
-        return idA < idB;
-    });
+                  return idA < idB;
+              });
 }
 
 } // namespace sel

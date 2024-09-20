@@ -2,9 +2,7 @@
 
 #include <ipmid/api.hpp>
 #include <ipmid/utils.hpp>
-#include <phosphor-logging/elog-errors.hpp>
-#include <phosphor-logging/log.hpp>
-#include <xyz/openbmc_project/Common/error.hpp>
+#include <phosphor-logging/lg2.hpp>
 #include <xyz/openbmc_project/State/BMC/server.hpp>
 
 #include <atomic>
@@ -32,8 +30,8 @@ void resetBMC()
 {
     sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
 
-    auto bmcStateObj = ipmi::getDbusObject(bus, bmcStateIntf, bmcStateRoot,
-                                           match);
+    auto bmcStateObj =
+        ipmi::getDbusObject(bus, bmcStateIntf, bmcStateRoot, match);
 
     auto service = ipmi::getService(bus, bmcStateIntf, bmcStateObj.first);
 
@@ -54,7 +52,7 @@ ipmi::RspType<> ipmiColdReset()
     }
     catch (const std::exception& e)
     {
-        log<level::ERR>(e.what());
+        lg2::error("Exception in Global Reset: {ERROR}", "ERROR", e);
         return ipmi::responseUnspecifiedError();
     }
 
