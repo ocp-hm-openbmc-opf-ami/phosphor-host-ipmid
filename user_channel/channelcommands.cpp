@@ -24,6 +24,15 @@
 
 namespace ipmi
 {
+const static constexpr char* systemDService = "org.freedesktop.systemd1";
+const static constexpr char* systemDObjPath = "/org/freedesktop/systemd1";
+const static constexpr char* systemDMgrIntf = "org.freedesktop.DBus.Properties";
+static constexpr const char* pefBus = "xyz.openbmc_project.pef.alert.manager";
+static constexpr const char* pefObj = "/xyz/openbmc_project/PefAlertManager";
+static constexpr const char* pefConfInfoIntf =
+    "xyz.openbmc_project.pef.PEFConfInfo";
+static constexpr const char* pefControlProperty = "PefControl";
+
 /** @brief implements the set channel access command
  *  @ param ctx - context pointer
  *  @ param channel - channel number
@@ -97,6 +106,38 @@ RspType<> ipmiSetChannelAccess(
             chActData.userAuthDisabled = usrAuth;
             chActData.perMsgAuthDisabled = msgAuth;
             chActData.alertingDisabled = alertDisabled;
+            uint8_t alertValue;
+            if (chActData.alertingDisabled == 1) // Assuming 1 means 'disabled'
+            {
+                alertValue = 0; // Disable PEFControl
+            }
+            else // Assuming 0 means 'enabled'
+            {
+                alertValue = 1; // Enable PEFControl
+            }
+            // Proceed with setting the PEFControl property
+            try
+            {
+                syslog(
+                    LOG_INFO,
+                    "SN channelcommands.cpp ipmiSetChannelAccess try cond \n");
+                auto conn = sdbusplus::bus::new_default();
+                auto method = conn.new_method_call(
+                    pefBus, pefObj, "org.freedesktop.DBus.Properties", "Set");
+
+                method.append("xyz.openbmc_project.pef.PEFConfInfo",
+                              "PEFControl");
+                std::variant<uint8_t> value = alertValue;
+                method.append(value);
+
+                auto reply = conn.call(method);
+            }
+            catch (const sdbusplus::exception_t& e)
+            {
+                syslog(LOG_ERR, "DBus Exception: %s", e.what());
+                return ipmi::responseResponseError();
+            }
+
             setActFlag |= (setAccessMode | setUserAuthEnabled |
                            setMsgAuthEnabled | setAlertingEnabled);
             break;
