@@ -55,9 +55,11 @@ static constexpr auto versionIntf = "xyz.openbmc_project.Software.Version";
 static constexpr auto activationIntf =
     "xyz.openbmc_project.Software.Activation";
 static constexpr auto softwareRoot = "/xyz/openbmc_project/software";
+static constexpr const char* configFile = "/var/lib/ipmi/system_info.json";
+static constexpr uint8_t parameteroffset = 3;
 
 void register_netfn_app_functions() __attribute__((constructor));
-
+using Json = nlohmann::json;
 using namespace phosphor::logging;
 using namespace sdbusplus::error::xyz::openbmc_project::common;
 using Version = sdbusplus::server::xyz::openbmc_project::software::Version;
@@ -1338,6 +1340,45 @@ static inline auto responseSetInProgressActive()
 }
 } // namespace ipmi
 
+std::vector<uint8_t> readPrimaryOperatingSystems(const std::string& configFile)
+{
+    std::ifstream jsonFile(configFile);
+
+    if (!jsonFile.good())
+    {
+        std::cerr << "JSON file not found: " << configFile << std::endl;
+        return {}; // Return an empty vector
+    }
+
+    Json data;
+    try
+    {
+        jsonFile >> data;
+    }
+    catch (const Json::parse_error& e)
+    {
+        std::cerr << "Error parsing JSON file: " << e.what() << std::endl;
+        return {}; // Return an empty vector
+    }
+
+    std::vector<uint8_t> primaryOperatingSystems;
+    if (data.contains("primary_operating_system") &&
+        data["primary_operating_system"].is_array())
+    {
+        for (const auto& os : data["primary_operating_system"])
+        {
+            primaryOperatingSystems.push_back(os.get<int>());
+        }
+    }
+    else
+    {
+        std::cerr << "primary_operating_system key not found or is not an array"
+                  << std::endl;
+    }
+
+    return primaryOperatingSystems;
+}
+
 ipmi::RspType<uint8_t,                // Parameter revision
               std::optional<uint8_t>, // data1 / setSelector / ProgressStatus
               std::optional<std::vector<uint8_t>>> // data2-17
@@ -1392,6 +1433,41 @@ ipmi::RspType<uint8_t,                // Parameter revision
     }
     std::vector<uint8_t> configData;
     size_t count = 0;
+    if (paramSelector == parameteroffset && setSelector == 0)
+    {
+        // Assuming primaryOperatingSystems contains the relevant data for
+        // paramSelector == 3
+        std::vector<uint8_t> primaryOperatingSystems =
+            readPrimaryOperatingSystems(configFile);
+
+        // Clear configData and process the first chunk
+        configData.clear();
+        configData.emplace_back(globalEncoding.globalencoding); // Add encoding
+        configData.emplace_back(
+            primaryOperatingSystems.size()); // Add string length
+
+        // Limit to 14 bytes (smallChunkSize)
+        count = std::min(primaryOperatingSystems.size(), smallChunkSize);
+        configData.resize(count + configDataOverhead); // 14 bytes total
+
+        // Copy the first chunk of data (primaryOperatingSystems) into
+        // configData
+        std::copy_n(primaryOperatingSystems.begin(), count,
+                    configData.begin() + configDataOverhead);
+
+        // If the total size is less than the required chunk size, append zero
+        // padding
+        if (configData.size() < configParameterLength)
+        {
+            syslog(LOG_INFO, "Adding zero-padding to fill remaining bytes");
+            std::fill_n(std::back_inserter(configData),
+                        configParameterLength - configData.size(), 0x00);
+        }
+
+        // Return success with the configData
+        return ipmi::responseSuccess(paramRevision, setSelector, configData);
+    }
+
     if (setSelector == 0)
     {                               // First chunk has only 14 bytes.
         configData.emplace_back(
@@ -1425,6 +1501,28 @@ ipmi::RspType<uint8_t,                // Parameter revision
                 "The String Data: ",
     phosphor::logging::entry("The Parameter String: %s", paramString.c_str()));
     return ipmi::responseSuccess(paramRevision, setSelector, configData);
+}
+
+void storeInJsonFile(const std::vector<uint8_t>& configData,
+                     const std::string& fileName)
+{
+    nlohmann::json jsonData;
+
+    // Convert configData to JSON array
+    jsonData["primary_operating_system"] = configData;
+
+    // Open the file to write
+    std::ofstream file(fileName);
+    if (file.is_open())
+    {
+        // Write the JSON data to the file
+        file << jsonData.dump(4); // pretty print with 4 spaces indent
+        file.close();
+    }
+    else
+    {
+        syslog(LOG_ERR, "Failed to open file: %s", fileName.c_str());
+    }
 }
 
 ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
@@ -1461,6 +1559,11 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
 
         transferStatus = data1 & progressMask;
         return ipmi::responseSuccess();
+    }
+    if (paramSelector == parameteroffset)
+    {
+        // Store data in JSON file
+        storeInJsonFile(configData, configFile);
     }
 
     if (configData.size() > configParameterLength)
