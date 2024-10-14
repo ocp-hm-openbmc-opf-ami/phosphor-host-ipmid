@@ -2028,7 +2028,7 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
             /*if not req to unlock */
             if (0 != (flagvalid))
             {
-                ipmi::responseInvalidFieldRequest();
+                return ipmi::responseInvalidFieldRequest();
             }
         }
         /*Change the valid bit*/
@@ -2052,7 +2052,7 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
         /*if not req to unlock */
         if (0 != (flagvalid))
         {
-            ipmi::responseInvalidFieldRequest();
+            return ipmi::responseInvalidFieldRequest();
         }
     }
     /*Change the valid bit*/
