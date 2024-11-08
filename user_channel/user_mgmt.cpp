@@ -491,6 +491,41 @@ void UserAccess::setUserInfo(const uint8_t userId, UserInfo* userInfo)
     writeUserData();
 }
 
+bool UserAccess::UserLockStatus(std::string& userName)
+{
+        const char* userNameStr = userName.c_str();
+        std::string objPath = "/xyz/openbmc_project/user/";
+        objPath += userNameStr;
+        const char* UserObjPath = objPath.c_str();
+        std::string lockedUserIface = "xyz.openbmc_project.User.Attributes";
+        std::string lockedUserProperty = "UserLockedForFailedAttempt";
+        std::variant<bool> lockedUserValue;
+        bool LockStatus;
+        static sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
+
+        try
+        {
+                auto method = bus.new_method_call(
+                                userMgrInterface, UserObjPath,
+                                dBusPropertiesInterface, "Get");
+
+                method.append(lockedUserIface, lockedUserProperty);
+                auto reply = bus.call(method);
+                reply.read(lockedUserValue);
+        }
+        catch (sdbusplus::exception_t&)
+        {
+                return false;
+        }
+
+        LockStatus = std::get<bool>(lockedUserValue);
+        if (LockStatus == true)
+        {
+                return true;
+        }
+        return false;
+}
+
 bool UserAccess::isValidChannel(const uint8_t chNum)
 {
     return (chNum < ipmiMaxChannels);

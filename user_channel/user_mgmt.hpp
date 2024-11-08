@@ -113,6 +113,13 @@ class UserAccess
     ~UserAccess();
     UserAccess();
 
+    /** @brief determines Lock status of user
+     * @param[in] username - username of user
+     *
+     * @return true if user locked, false otherwise
+     */
+    static bool UserLockStatus(std::string& userName);
+
     /** @brief determines valid channel
      *
      *  @param[in] chNum - channel number

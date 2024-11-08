@@ -56,6 +56,12 @@ Cc ipmiRenameUserEntryPassword(const std::string& userName,
     return ccSuccess;
 }
 
+bool ipmiUserLockStatus(std::string& userName)
+{
+	ipmi::UserAccess LockStatus;
+	return LockStatus.UserLockStatus(userName);
+}
+
 bool ipmiUserIsValidUserId(const uint8_t userId)
 {
     return UserAccess::isValidUserId(userId);

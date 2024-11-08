@@ -112,6 +112,14 @@ Cc ipmiClearUserEntryPassword(const std::string& userName);
 Cc ipmiRenameUserEntryPassword(const std::string& userName,
                                const std::string& newUserName);
 
+/** @brief determines Lock status of user
+ *
+ *  @param[in] username - username of user
+ *
+ *  @return true if user locked, false otherwise
+ */
+bool ipmiUserLockStatus(std::string& userName);
+
 /** @brief determines valid userId
  *
  *  @param[in] userId - user id
