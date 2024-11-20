@@ -606,11 +606,25 @@ bool UserAccess::isValidUserName(const std::string& userName)
         lg2::error("Unsupported characters in user name");
         return false;
     }
-    if (userName == "root")
+    /* Check the username is Valid by checking /etc/passwd for reserved users */
+    std::ifstream passwdFile("/etc/passwd");
+    std::string line;
+
+    if (!passwdFile.is_open()) 
     {
-        lg2::error("Invalid user name - root");
-        return false;
+	    lg2::error("Unable to open /etc/passwd file");
+	    return false;
     }
+    while (std::getline(passwdFile, line)) 
+    {
+	    if (line.find(userName + ":") == 0) 
+	    {
+		    lg2::error("Username Already Exists !!");
+		    return false;
+	    }
+    }
+    passwdFile.close();
+
     std::map<DbusUserObjPath, DbusUserObjValue> properties;
     try
     {
