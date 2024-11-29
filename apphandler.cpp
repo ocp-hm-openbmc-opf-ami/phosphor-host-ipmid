@@ -1439,21 +1439,12 @@ ipmi::RspType<uint8_t,                // Parameter revision
         // paramSelector == 3
         std::vector<uint8_t> primaryOperatingSystems =
             readPrimaryOperatingSystems(configFile);
-
-        // Clear configData and process the first chunk
-        configData.clear();
-        configData.emplace_back(globalEncoding.globalencoding); // Add encoding
-        configData.emplace_back(
-            primaryOperatingSystems.size()); // Add string length
-
-        // Limit to 14 bytes (smallChunkSize)
-        count = std::min(primaryOperatingSystems.size(), smallChunkSize);
-        configData.resize(count + configDataOverhead); // 14 bytes total
+        count = primaryOperatingSystems.size();
+        configData.resize(count);
 
         // Copy the first chunk of data (primaryOperatingSystems) into
         // configData
-        std::copy_n(primaryOperatingSystems.begin(), count,
-                    configData.begin() + configDataOverhead);
+        std::copy_n(primaryOperatingSystems.begin(), count, configData.begin());
 
         // If the total size is less than the required chunk size, append zero
         // padding
