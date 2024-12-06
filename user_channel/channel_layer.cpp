@@ -30,7 +30,16 @@ bool doesDeviceExist(const uint8_t chNum)
     // eth association is not done. Need to revisit later
     struct stat fileStat = {};
 
-    std::string channelName = getChannelName(chNum);
+    std::string channelName;
+    try
+    {
+        channelName = getChannelName(chNum);
+    }
+    catch (const std::invalid_argument& e)
+    {
+        return false;
+    }
+
     if (channelName.empty())
     {
         phosphor::logging::log<phosphor::logging::level::DEBUG>(
