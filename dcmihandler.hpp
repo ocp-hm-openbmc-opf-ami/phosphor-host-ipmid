@@ -40,6 +40,16 @@ static constexpr auto gDCMIPowerMgmtCapability = "PowerManagement";
 static constexpr auto gDCMIPowerMgmtSupported = 0x1;
 static constexpr auto gMaxSELEntriesMask = 0xFFF;
 static constexpr auto gByteBitSize = 8;
+// DCMI SET/GET THERMAL LIMIT
+static constexpr auto thermalBus = "xyz.openbmc_project.Settings";
+static constexpr auto thermalLimitObjpath =
+    "/xyz/openbmc_project/control/thermal_limit";
+static constexpr auto thermalLimitIntf =
+    "xyz.openbmc_project.Control.ThermalLimit";
+const std::map<uint8_t, std::string> thermalmap{
+    {0x40, "hardPowerOff"},
+    {0x20, "loggingSEL"},
+    {0x60, "hardPowerOffandloggingSEL"}};
 
 constexpr auto networkdService = "systemd-networkd.service";
 
@@ -51,6 +61,14 @@ constexpr auto networkdService = "systemd-networkd.service";
 bool isDCMIPowerMgmtSupported();
 
 }// namespace dcmi
+
+static constexpr auto hardPowerOff = 0x40;
+static constexpr auto loggingSEL = 0x20;
+static constexpr auto exceptionAction2 =
+    0x60; // Enable Hard powerOFF and Logging SEL
+static constexpr uint8_t inletTemp1 = 0x37;
+static constexpr uint8_t inletTemp2 = 0x40;
+static constexpr uint8_t entyInstance = 0x01;
 
 /** @brief Restart the systemd unit
       *  @param[in] unit - systemd unit name which needs to be
