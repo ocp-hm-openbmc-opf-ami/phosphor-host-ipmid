@@ -568,38 +568,45 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
 
     const size_t writeCount = writeData.size();
     const size_t readCount = readBuf.size();
-    i2c_msg i2cmsg[2] = {};
+    int msgCount = 0;
+    i2c_msg i2cmsg[2] = {0};
     if (writeCount)
     {
-        // Data will be writtern to the target address
-        i2cmsg[0].addr = targetAddr;
-        i2cmsg[0].flags = 0x00;
-        i2cmsg[0].len = writeCount;
-        i2cmsg[0].buf = writeData.data();
+        i2cmsg[msgCount].addr =
+            targetAddr;                // Target address for write operation
+        i2cmsg[msgCount].flags = 0x00; // Write operation
+        i2cmsg[msgCount].len =
+            writeCount; // Length of the write data (e.g., register address)
+        i2cmsg[msgCount].buf = writeData.data(); // Pointer to the data to write
+                                                 // (e.g., register address)
         msgreadwrite.msgs = &i2cmsg[0];
         msgreadwrite.nmsgs = 1;
+        msgCount++;
         ret = ::ioctl(i2cDev, I2C_RDWR, &msgreadwrite);
     }
+
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
     if (readCount)
     {
         // Data will be read into the buffer from the target address
-        i2cmsg[0].addr = targetAddr;
-        i2cmsg[0].flags = 0;
-        i2cmsg[0].len = 1;
-        i2cmsg[0].buf = data;
+        i2cmsg[msgCount].addr = targetAddr;
+        i2cmsg[msgCount].flags = 0;
+        i2cmsg[msgCount].len = 1;
+        i2cmsg[msgCount].buf = data;
 
-        i2cmsg[1].addr = targetAddr;
-        i2cmsg[1].flags = I2C_M_RD;
-        i2cmsg[1].len = readCount;
-        i2cmsg[1].buf = readBuf.data();
+        i2cmsg[msgCount].addr = targetAddr;
+        i2cmsg[msgCount].flags = I2C_M_RD; // Read operation
+        i2cmsg[msgCount].len = readCount;  // Length of the data to read
+        i2cmsg[msgCount].buf =
+            readBuf.data(); // Pointer to buffer to store the read data
+        msgCount++;
 
-        data[0] = 0x00;
-
-        msgreadwrite.msgs = &i2cmsg[0];
-        msgreadwrite.nmsgs = 2;
+        msgreadwrite.msgs = i2cmsg;
+        msgreadwrite.nmsgs = msgCount;
         ret = ::ioctl(i2cDev, I2C_RDWR, &msgreadwrite);
     }
+
     ::close(i2cDev);
     if (ret < 0)
     {
@@ -607,6 +614,7 @@ ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
                         phosphor::logging::entry("RET=%d", ret));
         return NotAcknowledgementOnWrite;
     }
+
     if (readCount)
     {
         readBuf.resize(readCount);
