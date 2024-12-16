@@ -1111,8 +1111,21 @@ ipmi_ret_t populate_record_from_dbus(get_sdr::SensorDataFullRecordBody* body,
         get_sdr::body::set_id_strlen(id_string.length(), body);
     }
     get_sdr::body::set_id_type(3, body); // "8-bit ASCII + Latin 1"
-    strncpy(body->id_string, id_string.c_str(),
-            get_sdr::body::get_id_strlen(body));
+
+    // Note Added this fix to address the Coverity issue, but it has not been
+    // verified because OneTree uses the intel-ipmi-oem sensor command handler.
+    auto id_size = get_sdr::body::get_id_strlen(body);
+
+    if (sizeof(body->id_string) > id_size)
+    {  
+        strncpy(body->id_string, id_string.c_str(),id_size);
+	body->id_string[id_size] = '\0';
+    }
+    else
+    {
+        std::printf("Buffer Overflow\n");
+	return IPMI_CC_UNSPECIFIED_ERROR;
+    }
 
     return IPMI_CC_OK;
 };
@@ -1124,6 +1137,7 @@ ipmi_ret_t ipmi_fru_get_sdr(ipmi_request_t request, ipmi_response_t response,
     auto resp = reinterpret_cast<get_sdr::GetSdrResp*>(response);
     get_sdr::SensorDataFruRecord record{};
     auto dataLength = 0;
+    int ret = 0;
 
     auto fru = frus.begin();
     uint8_t fruID{};
@@ -1168,8 +1182,20 @@ ipmi_ret_t ipmi_fru_get_sdr(ipmi_request_t request, ipmi_response_t response,
         get_sdr::body::set_device_id_strlen(deviceID.length(), &(record.body));
     }
 
-    strncpy(record.body.deviceID, deviceID.c_str(),
-            get_sdr::body::get_device_id_strlen(&(record.body)));
+    // Note Added this fix to address the Coverity issue, but it has not been
+    // verified because OneTree uses the intel-ipmi-oem sensor command handler.
+    auto deviceIdsize = get_sdr::body::get_device_id_strlen(&(record.body));
+
+    if (sizeof(record.body.deviceID) > deviceIdsize)
+    { 
+        strncpy(record.body.deviceID, deviceID.c_str(),deviceIdsize);
+	record.body.deviceID[deviceIdsize] = '\0';
+    }
+    else
+    {
+        std::printf("Buffer Overflow\n");
+	return IPMI_CC_UNSPECIFIED_ERROR;
+    }
 
     if (++fru == frus.end())
     {
@@ -1199,8 +1225,15 @@ ipmi_ret_t ipmi_fru_get_sdr(ipmi_request_t request, ipmi_response_t response,
     dataLength = std::min(static_cast<size_t>(req->bytes_to_read),
                           sizeof(record) - req->offset);
 
-    std::memcpy(resp->record_data,
-                reinterpret_cast<uint8_t*>(&record) + req->offset, dataLength);
+    // Note Added this fix to address the Coverity issue, but it has not been
+    // verified because OneTree uses the intel-ipmi-oem sensor command handler.
+    ret = snprintf(reinterpret_cast<char*>(resp->record_data), dataLength, "%s", reinterpret_cast<char*>(&record) + req->offset);
+
+    if (ret < 0 || ret >= dataLength)
+    {
+        std::printf("Buffer Overflow\n");
+        return IPMI_CC_UNSPECIFIED_ERROR;
+    }
 
     *data_len = dataLength;
     *data_len += 2; // additional 2 bytes for next record ID
@@ -1215,6 +1248,7 @@ ipmi_ret_t ipmi_entity_get_sdr(ipmi_request_t request, ipmi_response_t response,
     auto resp = reinterpret_cast<get_sdr::GetSdrResp*>(response);
     get_sdr::SensorDataEntityRecord record{};
     auto dataLength = 0;
+    int ret = 0;
 
     const auto& entityRecords =
         ipmi::sensor::EntityInfoMapContainer::getContainer()
@@ -1272,8 +1306,15 @@ ipmi_ret_t ipmi_entity_get_sdr(ipmi_request_t request, ipmi_response_t response,
     dataLength = std::min(static_cast<size_t>(req->bytes_to_read),
                           sizeof(record) - req->offset);
 
-    std::memcpy(resp->record_data,
-                reinterpret_cast<uint8_t*>(&record) + req->offset, dataLength);
+    // Note Added this fix to address the Coverity issue, but it has not been
+    // verified because OneTree uses the intel-ipmi-oem sensor command handler.
+    ret = snprintf(reinterpret_cast<char*>(resp->record_data), dataLength, "%s", reinterpret_cast<char*>(&record) + req->offset);
+
+    if (ret < 0 || ret >= dataLength)
+    {
+        std::printf("Buffer Overflow\n");
+        return IPMI_CC_UNSPECIFIED_ERROR;
+    }
 
     *data_len = dataLength;
     *data_len += 2; // additional 2 bytes for next record ID
