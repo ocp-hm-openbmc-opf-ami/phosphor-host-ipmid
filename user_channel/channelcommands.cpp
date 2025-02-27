@@ -75,7 +75,7 @@ RspType<> ipmiSetChannelAccess(
             break;
         case nvData:
 	    getChannelAccessPersistData(chNum, chNVData);
-	    if (chNVData.accessMode != accessMode) {
+	    if ( (accessMode == EChannelAccessMode::shared) && (chNVData.accessMode != accessMode) ) {
 		    lg2::debug("Set channel access - Invalid access set mode");
 		    return response(ccAccessModeNotSupportedForChannel);
 	    }
@@ -89,7 +89,7 @@ RspType<> ipmiSetChannelAccess(
 
         case activeData:
 	    getChannelAccessData(chNum, chActData);
-	    if (chActData.accessMode != accessMode) {
+	    if ( (accessMode == EChannelAccessMode::shared) && (chActData.accessMode != accessMode) ){
 		    lg2::debug("Set channel access - Invalid access set mode");
 		    return response(ccAccessModeNotSupportedForChannel);
 	    }
