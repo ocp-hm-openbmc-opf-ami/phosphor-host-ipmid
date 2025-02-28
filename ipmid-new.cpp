@@ -35,7 +35,7 @@
 #include <sdbusplus/bus.hpp>
 #include <sdbusplus/bus/match.hpp>
 #include <sdbusplus/timer.hpp>
-
+#include <ipmid/utils.hpp>
 #include <algorithm>
 #include <any>
 #include <exception>
@@ -60,6 +60,14 @@ using namespace phosphor::logging;
 // IPMI Spec, shared Reservation ID.
 static unsigned short selReservationID = 0xFFFF;
 static bool selReservationValid = false;
+
+const static constexpr char* serviceOOBInventoryConfig = "xyz.openbmc_project.OOBInventoryConfig";
+const static constexpr char* objPathMotherboard = "/xyz/openbmc_project/inventory/system/chassis/motherboard";
+const static constexpr char* interfaceControlBootOrder = "xyz.openbmc_project.Control.Boot.Order";
+const static constexpr char* propertyBootSourceOverrideEnabled = "BootSourceOverrideEnabled";
+const static constexpr char* objPathOobCrc = "/xyz/openbmc_project/OOBInventoryConfig/OobCrc";
+const static constexpr char* interfaceOobBiosConfigInventoryOobCrc = "xyz.openbmc_project.OobBiosConfigInventory.CRC.OobCrc";
+const static constexpr char* propertyBootOverride = "BootOverride";
 
 unsigned short reserveSel(void)
 {
@@ -836,6 +844,20 @@ std::unique_ptr<phosphor::host::command::Manager>& ipmid_get_host_cmd_manager()
     return cmdManager;
 }
 
+void MonitorIPMIBootOverrideOpt(sdbusplus::message::message& msg) {
+    std::string interface;
+    std::map<std::string, std::variant<bool>> properties;
+    auto bus = sdbusplus::bus::new_default();
+
+    msg.read(interface, properties);
+    if (properties.find("Enabled") != properties.end() && (std::get<bool>(properties["Enabled"])))
+    {
+       ipmi::setDbusProperty(bus, serviceOOBInventoryConfig, objPathMotherboard, interfaceControlBootOrder, propertyBootSourceOverrideEnabled, "Disabled");
+       ipmi::setDbusProperty(bus, serviceOOBInventoryConfig, objPathOobCrc, interfaceOobBiosConfigInventoryOobCrc, propertyBootOverride, static_cast<uint64_t>(0));
+    }
+
+}
+
 // These are symbols that are present in libipmid, but not expected
 // to be used except here (or maybe a unit test), so declare them here
 extern void setIoContext(std::shared_ptr<boost::asio::io_context>& newIo);
@@ -908,6 +930,14 @@ int main(int argc, char* argv[])
                                       "xyz.openbmc_project.Ipmi.Server");
     iface->register_method("execute", ipmi::executionEntry);
     iface->initialize();
+    
+    auto match = sdbusplus::bus::match::match(
+        *sdbusp,
+        "type='signal',interface='org.freedesktop.DBus.Properties',"
+        "member='PropertiesChanged',path='/xyz/openbmc_project/control/host0/boot',"
+        "arg0='xyz.openbmc_project.Object.Enable'",
+        MonitorIPMIBootOverrideOpt
+    );
 
     io->run();
 
