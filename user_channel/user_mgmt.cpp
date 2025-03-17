@@ -282,6 +282,7 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
                 std::strncpy(
                     reinterpret_cast<char*>(userData->user[usrIndex].userName),
                     newUserName.c_str(), ipmiMaxUserName);
+                userData->user[usrIndex].userName[ipmiMaxUserName - 1] = '\0';
                 ipmiRenameUserEntryPassword(userName, newUserName);
                 break;
             }
@@ -443,25 +444,34 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
 
 UserAccess::~UserAccess()
 {
-    if (signalHndlrObject)
+    try
     {
-        userUpdatedSignal.reset();
-        userMgrRenamedSignal.reset();
-        userPropertiesSignal.reset();
-        sigHndlrLock.unlock();
+      if (signalHndlrObject)
+      {
+          userUpdatedSignal.reset();
+          userMgrRenamedSignal.reset();
+          userPropertiesSignal.reset();
+          sigHndlrLock.unlock();
+      }
+    }
+    catch (const boost::interprocess::interprocess_exception& e)
+    {
+      std::cerr << "Interprocess exception caught: " << e.what() << std::endl;
     }
 }
 
 UserAccess::UserAccess() : bus(ipmid_get_sd_bus_connection())
 {
+    fileLastUpdatedTime.tv_nsec = 0;
     std::ofstream mutexCleanUpFile;
     mutexCleanUpFile.open(ipmiMutexCleanupLockFile,
                           std::ofstream::out | std::ofstream::app);
     if (!mutexCleanUpFile.good())
     {
         lg2::debug("Unable to open mutex cleanup file");
-        return;
     }
+    else
+    {
     mutexCleanUpFile.close();
     mutexCleanupLock = boost::interprocess::file_lock(ipmiMutexCleanupLockFile);
     if (mutexCleanupLock.try_lock())
@@ -469,6 +479,7 @@ UserAccess::UserAccess() : bus(ipmid_get_sd_bus_connection())
         boost::interprocess::named_recursive_mutex::remove(ipmiUserMutex);
     }
     mutexCleanupLock.lock_sharable();
+    }
     userMutex = std::make_unique<boost::interprocess::named_recursive_mutex>(
         boost::interprocess::open_or_create, ipmiUserMutex);
 
@@ -1115,11 +1126,6 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
             if (mediaGrpEntry != groups.end()) {
                 groups.erase(mediaGrpEntry);
             }
-            //find snmp group and remove it, by default user privilege user should not have snmp privilege
-            auto snmpGrpEntry = find(groups.begin(), groups.end(), snmpGroup);
-            if (snmpGrpEntry != groups.end()) {
-                groups.erase(snmpGrpEntry);
-            } 
             method.append(userName.c_str(), groups,
                           ipmiPrivIndex[PRIVILEGE_USER], false);
             auto reply = bus.call(method);
@@ -1322,6 +1328,7 @@ void UserAccess::readUserData()
         std::string userName = userInfo[jsonUserName].get<std::string>();
         std::strncpy(reinterpret_cast<char*>(usersTbl.user[usrIndex].userName),
                      userName.c_str(), ipmiMaxUserName);
+        usersTbl.user[usrIndex].userName[ipmiMaxUserName - 1] = '\0';
 
         std::vector<std::string> privilege =
             userInfo[jsonPriv].get<std::vector<std::string>>();
@@ -1525,6 +1532,7 @@ bool UserAccess::addUserEntry(const std::string& userName,
     }
     std::strncpy(reinterpret_cast<char*>(userData->user[freeIndex].userName),
                  userName.c_str(), ipmiMaxUserName);
+    userData->user[freeIndex].userName[ipmiMaxUserName - 1] = '\0';
     uint8_t priv =
         static_cast<uint8_t>(UserAccess::convertToIPMIPrivilege(sysPriv)) &
         privMask;
