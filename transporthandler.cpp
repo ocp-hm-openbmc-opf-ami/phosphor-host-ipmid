@@ -1216,8 +1216,11 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     return responseSuccess();
                 }
                 case SetStatus::Commit:
-                   return response(ccParamNotSupported);
-		 case SetStatus::Reserved:
+		{
+		    getSetStatus(channel) = SetStatus::Complete;
+                    return response(ccParamNotSupported);
+		}
+		case SetStatus::Reserved:
                    return responseInvalidFieldRequest();
             }
             return response(ccParamNotSupported);
