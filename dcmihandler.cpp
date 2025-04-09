@@ -1430,7 +1430,8 @@ ipmi::RspType<> setThermalLimit(uint8_t thermalEntityID,
 
     if ((thermalExceptionAction != loggingSEL) &&
         (thermalExceptionAction != hardPowerOff) &&
-        (thermalExceptionAction != exceptionAction2))
+        (thermalExceptionAction != exceptionAction2) &&
+        (thermalExceptionAction != exceptionActionNon))
     {
         return ipmi::responseInvalidFieldRequest();
     }

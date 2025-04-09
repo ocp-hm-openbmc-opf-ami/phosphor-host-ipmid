@@ -49,7 +49,8 @@ static constexpr auto thermalLimitIntf =
 const std::map<uint8_t, std::string> thermalmap{
     {0x40, "hardPowerOff"},
     {0x20, "loggingSEL"},
-    {0x60, "hardPowerOffandloggingSEL"}};
+    {0x60, "hardPowerOffandloggingSEL"},
+    {0x00, "exceptionActionNon"}};
 
 constexpr auto networkdService = "systemd-networkd.service";
 
@@ -66,6 +67,7 @@ static constexpr auto hardPowerOff = 0x40;
 static constexpr auto loggingSEL = 0x20;
 static constexpr auto exceptionAction2 =
     0x60; // Enable Hard powerOFF and Logging SEL
+static constexpr auto exceptionActionNon = 0x00; //No exception Action Perform     
 static constexpr uint8_t inletTemp1 = 0x37;
 static constexpr uint8_t inletTemp2 = 0x40;
 static constexpr uint8_t entyInstance = 0x01;
