@@ -65,6 +65,7 @@ const std::unordered_set<IP::AddressOrigin> originsV4 = {
 };
 
 static constexpr uint8_t oemCmdStart = 192;
+static constexpr uint8_t InteloemCmdStart = 199;
 bool IsDHCP = false;
 
 // Checks if the ifname is part of the networkd path
@@ -782,6 +783,132 @@ static void unpackFinal(message::Payload& req)
     }
 }
 
+/** @brief Check if channel interface is correct
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @param[in] interface - The NCSI mode for NCSI interface
+ *  @return 0 for the right interface
+ */
+int checkinterfacename(sdbusplus::bus::bus& bus, ChannelParams& params, uint8_t interface)
+{
+    auto interfacename = std::get<std::string>(getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "InterfaceName"));
+    if(interfacename == "eth0" && interface == 0)
+        return 0;
+    else if(interfacename == "eth1" && interface == 1)
+        return 0;
+    else if(interfacename == "eth2" && interface == 2)
+        return 0;
+    else if(interfacename == "eth3" && interface == 3)
+        return 0;
+    else
+        return 1;
+}
+
+/** @brief Sets the NCSI Mode Property on the given interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @param[in] mode - The NCSI mode for NCSI interface
+ *  @return A reference to the SetStatus for the channel
+ */
+void setNCSIModeProperty(sdbusplus::bus::bus& bus, const ChannelParams& params, uint8_t mode)
+{
+    if(mode == 0)
+        setDbusProperty(bus, params.service, params.logicalPath, INTF_NCSI,"Mode", "xyz.openbmc_project.Network.NCSIConfiguration.Mode.Manual");
+    else
+        setDbusProperty(bus, params.service, params.logicalPath, INTF_NCSI,"Mode", "xyz.openbmc_project.Network.NCSIConfiguration.Mode.Auto");
+}
+
+/** @brief Get InterfaceName from the ethernet interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @return InterfaceName
+ */
+
+std::string getInterfaceProperty(sdbusplus::bus::bus& bus, const ChannelParams& params)
+{
+    auto interfacename = getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET, "InterfaceName");
+    return std::get<std::string>(interfacename);
+}
+
+
+/** @brief Determines the NCSI of the ethernet interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @return The configured NCSI Mode
+ */
+
+std::string getNCSIProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto mode = (getDbusProperty(bus, params.service, params.logicalPath, INTF_NCSI,"Mode"));
+    return std::get<std::string>(mode);
+}
+
+/** @brief Set the Using NCSI Package ID and Channel ID
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @param[in] packageid - The NCSI Package ID to set
+ *  @param[in] channelid - The NCSI Channel ID to set
+ *  @return A reference to the SetStatus for the channel
+ */
+
+void setPackageChannelProperty(sdbusplus::bus_t& bus, const ChannelParams& params, uint8_t packageid, uint8_t channelid)
+{
+    const std::string service = std::string(INTF_NCSI_SERVICE);
+    const std::string logicalPath= std::string(INTF_NCSI_ROOT_PATH) + "/" + params.ifname;
+
+    auto newreq = bus.new_method_call(service.c_str(), logicalPath.c_str(),
+                                      INTF_NCSI, "SetPackageChannel");
+
+    newreq.append(packageid,channelid);
+    bus.call_noreply(newreq);
+    return;
+}
+
+/** @brief Gets the NCSI Package Property on the given interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @return The Using NCSI Package Property
+ */
+
+uint8_t getPackageProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto packageid = (getDbusProperty(bus, params.service, params.logicalPath, INTF_NCSI,"Package"));
+    return std::get<uint8_t>(packageid);
+}
+
+/** @brief Gets the NCSI Channel Property on the given interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @return The Using NCSI Channel Property
+ */
+
+uint8_t getChannelProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto channelid = (getDbusProperty(bus, params.service, params.logicalPath, INTF_NCSI,"Channel"));
+    return std::get<uint8_t>(channelid);
+}
+
+/** @brief Gets the NCSI ChannelList Property on the given interface
+ *
+ *  @param[in] bus    - The bus object used for lookups
+ *  @param[in] params - The parameters for the channel
+ *  @return The NCSI ChannelList Property
+ */
+
+std::vector<std::tuple<uint16_t, std::vector<uint16_t>>> getChannelListProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+{
+    auto packagechannellist = getDbusProperty(bus, params.service, params.logicalPath, INTF_NCSI,"ChannelList");
+    return std::get<std::vector<std::tuple<uint16_t, std::vector<uint16_t>>>>(packagechannellist);
+}
+
+
 /**
  * Define placeholder command handlers for the OEM Extension bytes for the Set
  * LAN Configuration Parameters and Get LAN Configuration Parameters
@@ -823,15 +950,169 @@ RspType<> setLanOem(uint8_t channel, uint8_t parameter, message::Payload& req)
 RspType<message::Payload>
     getLanOem(uint8_t channel, uint8_t parameter, uint8_t set, uint8_t block)
         __attribute__((weak));
-
-RspType<> setLanOem(uint8_t, uint8_t, message::Payload& req)
+RspType<> setAMILanOem(uint8_t channel, uint8_t parameter, message::Payload& req);
+RspType<message::Payload>
+    getAMILanOem(uint8_t channel, uint8_t parameter, uint8_t set, uint8_t block);
+RspType<> setAMILanOem(uint8_t channel, uint8_t parameter, message::Payload& req)
 {
-    req.trailingOk = true;
+    switch (static_cast<LanAMIOEMParam>(parameter))
+    {
+        case LanAMIOEMParam::NCSIMode:
+        {
+            uint8_t NCSIInterface;
+            uint8_t mode;
+            if (req.unpack(NCSIInterface, mode) != 0 || !req.fullyUnpacked())
+            {
+                return responseReqDataLenInvalid();
+            }
+            unpackFinal(req);
+            if (NCSIInterface >3 || mode > 1)
+            {
+                return responseInvalidFieldRequest();
+            }
+
+            int interfacecheck = -1;
+            interfacecheck = channelCall<checkinterfacename>(channel, NCSIInterface);
+            if(interfacecheck)
+            {
+                log<level::ERR>("Wrong NCSI Interface Index.");
+                return responseInvalidFieldRequest();
+            }
+
+            channelCall<setNCSIModeProperty>(channel,mode);
+            return responseSuccess();
+
+        }
+        case LanAMIOEMParam::NCSIUsingPort:
+        {
+            auto mode = channelCall<getNCSIProperty>(channel);
+
+            if(mode.empty())
+                return responseCommandNotAvailable();
+            else
+            {
+                if(mode.find("Auto") != std::string::npos)
+                    return responseCommandNotAvailable();
+            }
+
+            uint8_t portnum;
+            uint8_t NCSIInterface;
+            uint8_t packageid;
+            uint8_t channelid;
+            if (req.unpack(portnum, NCSIInterface, packageid, channelid) != 0 || !req.fullyUnpacked())
+            {
+                return responseReqDataLenInvalid();
+            }
+            unpackFinal(req);
+            if(portnum != 0x01)
+            {
+                log<level::ERR>("Not supported port number.");
+                return responseReqDataLenInvalid();
+            }
+
+            int interfacecheck = -1;
+            interfacecheck = channelCall<checkinterfacename>(channel, NCSIInterface);
+            if(interfacecheck)
+            {
+                log<level::ERR>("Wrong NCSI Interface Index.");
+                return responseInvalidFieldRequest();
+            }
+
+            if(packageid >7 || channelid >0x1f)
+            {
+                log<level::ERR>("Wrong PackageID or ChannekID Range.");
+                return responseInvalidFieldRequest();
+            }
+            channelCall<setPackageChannelProperty>(channel,packageid,channelid);
+            return responseSuccess();
+        }
+        case LanAMIOEMParam::NCSIChannelList:
+        {
+            req.trailingOk = true;
+            return response(ccParamReadOnly);
+        }
+    }
     return response(ccParamNotSupported);
 }
 
-RspType<message::Payload> getLanOem(uint8_t, uint8_t, uint8_t, uint8_t)
+RspType<message::Payload> getAMILanOem(uint8_t channel, uint8_t parameter, uint8_t set, uint8_t block)
 {
+    message::Payload ret;
+    constexpr uint8_t current_revision = 0x11;
+    ret.pack(current_revision);
+
+    switch (static_cast<LanAMIOEMParam>(parameter))
+    {
+        case LanAMIOEMParam::NCSIMode:
+        {
+            if((set != 0) || (block != 0)){
+                return responseInvalidFieldRequest();
+            }
+
+            uint8_t NCSIInterface = 0;
+            auto interfacename = channelCall<getInterfaceProperty>(channel);
+            if(interfacename == "eth0")
+                NCSIInterface = 0;
+            else if(interfacename == "eth1")
+                NCSIInterface = 1;
+            else if(interfacename == "eth2")
+                NCSIInterface = 2;
+            else if(interfacename == "eth3")
+                NCSIInterface = 3;
+            else{
+                log<level::ERR>("Error in finding NCSI Interface Name.");
+                return responseUnspecifiedError();
+            }
+
+            uint8_t NCSIMode = 0;
+            auto mode = channelCall<getNCSIProperty>(channel);
+
+            if(mode.empty())
+                log<level::ERR>("Error in getting Mode.");
+            else{
+                if(mode.find("Auto") != std::string::npos){
+                    NCSIMode = 1;
+                }
+                else{
+                    NCSIMode = 0;
+                }
+            }
+
+            ret.pack(NCSIInterface, NCSIMode);
+            return responseSuccess(std::move(ret));
+        }
+        case LanAMIOEMParam::NCSIUsingPort:
+        {
+            if((set != 0) || (block != 0)){
+                return responseInvalidFieldRequest();
+            }
+
+            uint8_t packageid= channelCall<getPackageProperty>(channel);
+            uint8_t channelid = channelCall<getChannelProperty>(channel);
+
+            ret.pack(packageid, channelid);
+            return responseSuccess(std::move(ret));
+        }
+        case LanAMIOEMParam::NCSIChannelList:
+        {
+            if((set != 0) || (block != 0)){
+                return responseInvalidFieldRequest();
+            }
+
+            auto packagechannellist = channelCall<getChannelListProperty>(channel);
+
+            for (int package_num = 0;package_num < (int)packagechannellist.size();package_num++) {
+                for (int channel_num = 0;channel_num < (int)(std::get<1>(packagechannellist[package_num])).size();channel_num++) {
+                    ret.pack((uint8_t)std::get<0>(packagechannellist[package_num]));
+                    std::vector<uint16_t> channellist = std::get<1>(packagechannellist[package_num]);
+                    ret.pack((uint8_t)channellist[channel_num]);
+                }
+            }
+
+
+            return responseSuccess(std::move(ret));
+        }
+    }
     return response(ccParamNotSupported);
 }
 
@@ -2083,7 +2364,10 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
 
     if (parameter >= oemCmdStart)
     {
-        return setLanOem(channel, parameter, req);
+        if(parameter <= InteloemCmdStart)
+            return setAMILanOem(channel, parameter, req);
+        else
+            return setLanOem(channel, parameter, req);
     }
 
     req.trailingOk = true;
@@ -2782,7 +3066,10 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
 
     if (parameter >= oemCmdStart)
     {
-        return getLanOem(channel, parameter, set, block);
+        if(parameter <= InteloemCmdStart)
+            return getAMILanOem(channel, parameter, set, block);
+        else
+            return getLanOem(channel, parameter, set, block);
     }
 
     return response(ccParamNotSupported);
