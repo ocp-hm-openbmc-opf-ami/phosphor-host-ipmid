@@ -525,9 +525,13 @@ int convertVersion(std::string s, Revision& rev)
 
         // convert major
         {
-            std::string_view str = m[matches[0]].str();
-            auto [ptr, ec]{std::from_chars(str.begin(), str.end(), val)};
-            if (ec != std::errc() || ptr != str.begin() + str.size())
+            // Note Added this fix to address the Coverity issue, but it has not
+            // been verified because OneTree uses the intel-ipmi-oem GetDeviceId
+            // command handler.
+            std::string str = m[matches[0]].str();
+            auto [ptr, ec] =
+                std::from_chars(str.data(), str.data() + str.size(), val);
+            if (ec != std::errc() || ptr != str.data() + str.size())
             { // failed to convert major string
                 return -1;
             }
@@ -1414,7 +1418,6 @@ ipmi::RspType<uint8_t,                // Parameter revision
                                      std::nullopt);
     }
 
-
     if (sysInfoParamStore == nullptr)
     {
         sysInfoParamStore = std::make_unique<SysInfoParamStore>();
@@ -1460,10 +1463,9 @@ ipmi::RspType<uint8_t,                // Parameter revision
     }
 
     if (setSelector == 0)
-    {                               // First chunk has only 14 bytes.
-        configData.emplace_back(
-            globalEncoding.globalencoding); // encoding
-        configData.emplace_back(paramString.length()); // string length
+    { // First chunk has only 14 bytes.
+        configData.emplace_back(globalEncoding.globalencoding); // encoding
+        configData.emplace_back(paramString.length());          // string length
         count = std::min(paramString.length(), smallChunkSize);
         configData.resize(count + configDataOverhead);
         std::copy_n(paramString.begin(), count,
@@ -1489,8 +1491,9 @@ ipmi::RspType<uint8_t,                // Parameter revision
                     configData.begin()); // 16 bytes chunk
     }
     phosphor::logging::log<phosphor::logging::level::INFO>(
-                "The String Data: ",
-    phosphor::logging::entry("The Parameter String: %s", paramString.c_str()));
+        "The String Data: ",
+        phosphor::logging::entry("The Parameter String: %s",
+                                 paramString.c_str()));
     return ipmi::responseSuccess(paramRevision, setSelector, configData);
 }
 
@@ -1589,7 +1592,7 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
         {
             return ipmi::responseInvalidFieldRequest();
         }
-	globalEncoding.globalencoding = encoding;
+        globalEncoding.globalencoding = encoding;
         size_t stringLen = configData.at(1); // string length
         count = std::min(stringLen, smallChunkSize);
         count = std::min(count, configData.size());

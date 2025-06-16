@@ -88,8 +88,8 @@ static inline std::string getLoggingObjPath(uint16_t id)
     return std::string(ipmi::sel::logBasePath) + "/" + std::to_string(id);
 }
 
-std::optional<std::pair<uint16_t, SELEntry>>
-    parseLoggingEntry(const std::string& p)
+std::optional<std::pair<uint16_t, SELEntry>> parseLoggingEntry(
+    const std::string& p)
 {
     try
     {
@@ -375,15 +375,30 @@ ipmi_ret_t getSELEntry(ipmi_netfn_t, ipmi_cmd_t, ipmi_request_t request,
         }
 
         auto diff = ipmi::sel::selRecordSize - requestData->offset;
-        auto readLength =
-            std::min(diff, static_cast<int>(requestData->readLength));
+        auto readLength = std::min<size_t>(diff, requestData->readLength);
+        int RetVal = 0;
 
-        std::memcpy(response, &record.nextRecordID,
-                    sizeof(record.nextRecordID));
-        std::memcpy(static_cast<uint8_t*>(response) +
-                        sizeof(record.nextRecordID),
-                    &record.event.eventRecord.recordID + requestData->offset,
-                    readLength);
+        RetVal = snprintf(reinterpret_cast<char*>(response),
+                          sizeof(record.nextRecordID), "%u",
+                          record.nextRecordID);
+        if (RetVal < 0 ||
+            RetVal >= static_cast<int>(sizeof(record.nextRecordID)))
+        {
+            std::printf("Buffer Overflow\n");
+            return IPMI_CC_UNSPECIFIED_ERROR;
+        }
+
+        RetVal = snprintf(
+            reinterpret_cast<char*>(response) + sizeof(record.nextRecordID),
+            readLength, "%s",
+            reinterpret_cast<const char*>(&record.event.eventRecord.recordID) +
+                requestData->offset);
+        if (RetVal < 0 || RetVal >= static_cast<int>(readLength))
+        {
+            std::printf("Buffer Overflow\n");
+            return IPMI_CC_UNSPECIFIED_ERROR;
+        }
+
         *data_len = sizeof(record.nextRecordID) + readLength;
     }
 
