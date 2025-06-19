@@ -44,6 +44,10 @@
 #include <tuple>
 #include <vector>
 
+/* Get Self Test Result response */
+#define GST_NO_ERROR 0x55
+#define GST_CORRUPTED_DEVICES 0x57
+
 extern sd_bus* bus;
 
 constexpr auto bmc_state_interface = "xyz.openbmc_project.State.BMC";
@@ -59,19 +63,48 @@ static constexpr const char* configFile = "/var/lib/ipmi/system_info.json";
 static constexpr uint8_t parameteroffset = 3;
 
 /* Get Self Test Result dbus sources */
+
 constexpr auto ipmiLoggingService = "xyz.openbmc_project.Logging.IPMI";
 constexpr auto ipmiLoggingObject = "/xyz/openbmc_project/Logging/IPMI";
 constexpr auto ipmiLoggingIntf = "xyz.openbmc_project.Logging.IPMI";
+
+constexpr auto loggingService = "xyz.openbmc_project.Logging";
+constexpr auto loggingObject = "/xyz/openbmc_project/logging";
+constexpr auto loggingIntf = "xyz.openbmc_project.Logging.Create";
+
 constexpr auto fruService = "xyz.openbmc_project.FruDevice";
 constexpr auto fruObjectPath = "/xyz/openbmc_project/FruDevice";
 constexpr auto fruIntf = "xyz.openbmc_project.FruDeviceManager";
+
+constexpr auto ipmbService = "xyz.openbmc_project.Ipmi.Channel.Ipmb";
+constexpr auto ipmbObjectPath = "/xyz/openbmc_project/Ipmi/Channel/Ipmb";
+constexpr auto ipmbIntf = "org.openbmc.Ipmb";
+
+constexpr auto objMapperService = "xyz.openbmc_project.ObjectMapper";
+constexpr auto objMapperObjPath = "/xyz/openbmc_project/object_mapper";
+constexpr auto objMapperIntf = "xyz.openbmc_project.ObjectMapper";
+constexpr auto swUpdatebleObjPath = "/xyz/openbmc_project/software/updateable";
+
+constexpr auto thresholdSensorIntf = "xyz.openbmc_project.Sensor.Value";
+constexpr auto discreteSensorIntf = "xyz.openbmc_project.Sensor.State";
+
+constexpr auto fwVerService = "xyz.openbmc_project.Software.BMC.Updater";
+constexpr auto fwVerIntf = "xyz.openbmc_project.Software.Version";
+
 constexpr auto propIntf = "org.freedesktop.DBus.Properties";
 
-/* Get Self Test Result response */
-#define GST_NO_ERROR 0x55
-#define GST_CORRUPTED_DEVICES 0x57
-#define GST_SEL_FAIL_OFFSET 0x80
-#define GST_FRU_FAIL_OFFSET 0x20
+// Bitfield definitions for DATA_CORRUPT (0x57)
+enum SelfTestErrorBitfield : uint8_t
+{
+    SEL_INACCESSIBLE = 1 << 7,
+    SDR_REPO_INACCESSIBLE = 1 << 6,
+    FRU_INACCESSIBLE = 1 << 5,
+    IPMB_SIGNAL_FAIL = 1 << 4,
+    SDR_REPO_EMPTY = 1 << 3,
+    FRU_INTERNAL_CORRUPT = 1 << 2,
+    BOOT_BLOCK_CORRUPT = 1 << 1,
+    OP_FW_CORRUPT = 1 << 0
+};
 
 /*Set Channel Security Keys*/
 
@@ -766,6 +799,210 @@ ipmi::RspType<uint8_t,  // Device ID
         devId.addnDevSupport, devId.manufId, devId.prodId, devId.aux);
 }
 
+bool isSELAccessible()
+{
+    try
+    {
+        sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+
+        auto selAvailableCall = bus.new_method_call(
+            loggingService, loggingObject, propIntf, "GetAll");
+        selAvailableCall.append(loggingIntf);
+
+        auto selAvaiableReply = bus.call(selAvailableCall);
+
+        auto selAvailableCall_2 = bus.new_method_call(
+            ipmiLoggingService, ipmiLoggingObject, propIntf, "GetAll");
+        selAvailableCall_2.append(ipmiLoggingIntf);
+
+        auto selAvaiableReply_2 = bus.call(selAvailableCall_2);
+
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("SEL Repository update or self-initialization in progress. "
+                   "Interface: {INTERFACE}, Error: {ERROR}",
+                   "INTERFACE", loggingIntf, "ERROR", e);
+        return false;
+    }
+}
+
+bool isSDRRepoAccessible()
+{
+    try
+    {
+        sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+
+        auto method = bus.new_method_call(objMapperService, objMapperObjPath,
+                                          objMapperIntf, "GetSubTree");
+
+        std::string path = "/xyz/openbmc_project/sensors";
+        int32_t depth = 2;
+        std::vector<std::string> interfaces = {thresholdSensorIntf,
+                                               discreteSensorIntf};
+
+        method.append(path, depth, interfaces);
+
+        std::map<std::string, std::map<std::string, std::vector<std::string>>>
+            SensorData;
+
+        auto reply = bus.call(method);
+        reply.read(SensorData);
+
+        if (SensorData.size())
+        {
+            return true;
+        }
+
+        return false;
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("Failed to check SDR count"
+                   " Error: {ERROR}",
+                   "ERROR", e);
+        return false;
+    }
+}
+
+bool isFRUAccessible()
+{
+    sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+
+    auto fruAvailableCall =
+        bus.new_method_call(fruService, fruObjectPath, propIntf, "GetAll");
+    fruAvailableCall.append(fruIntf);
+    try
+    {
+        auto fruAvailableReply = bus.call(fruAvailableCall);
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("FRU Repository update or self-initialization in progress. "
+                   "Interface: {INTERFACE}, Error: {ERROR}",
+                   "INTERFACE", fruIntf, "ERROR", e);
+        return false;
+    }
+}
+
+bool isIPMBSignalOk()
+{
+    sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+
+    auto ipmbCheckCall =
+        bus.new_method_call(ipmbService, ipmbObjectPath, propIntf, "GetAll");
+    ipmbCheckCall.append(ipmbIntf);
+    try
+    {
+        auto fruAvailableReply = bus.call(ipmbCheckCall);
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("IPMB signal check failed"
+                   "Interface: {INTERFACE}, Error: {ERROR}",
+                   "INTERFACE", fruIntf, "ERROR", e);
+        return false;
+    }
+}
+
+bool isSDRRepoEmpty()
+{
+    try
+    {
+        sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+
+        auto method = bus.new_method_call(objMapperService, objMapperObjPath,
+                                          objMapperIntf, "GetSubTree");
+
+        std::string path = "/xyz/openbmc_project/sensors";
+        int32_t depth = 2;
+        std::vector<std::string> interfaces = {thresholdSensorIntf,
+                                               discreteSensorIntf};
+
+        method.append(path, depth, interfaces);
+
+        std::map<std::string, std::map<std::string, std::vector<std::string>>>
+            SensorData;
+
+        auto reply = bus.call(method);
+        reply.read(SensorData);
+
+        if (SensorData.size())
+        {
+            return false;
+        }
+
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("Failed to check SDR count"
+                   " Error: {ERROR}",
+                   "ERROR", e);
+        return true;
+    }
+}
+
+bool isBootBlock_isOperationalFw_Ok()
+{
+    try
+    {
+        sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+        std::string version = "";
+
+        auto method = bus.new_method_call(objMapperService, swUpdatebleObjPath,
+                                          propIntf, "Get");
+
+        method.append("xyz.openbmc_project.Association", "endpoints");
+
+        auto reply = bus.call(method);
+
+        std::variant<std::vector<std::string>> result;
+        reply.read(result);
+
+        const auto fwVerObjPaths = std::get<std::vector<std::string>>(result);
+
+        for (const auto& fwVerObjPath : fwVerObjPaths)
+        {
+            auto method = bus.new_method_call(
+                fwVerService, fwVerObjPath.c_str(), propIntf, "Get");
+            method.append(fwVerIntf, "Version");
+
+            auto reply = bus.call(method);
+
+            std::variant<std::string> value;
+            reply.read(value);
+
+            version = std::get<std::string>(value);
+
+            if (version == "NA")
+            {
+                lg2::error("{OBJPATH} is Corrupted", "OBJPATH", fwVerObjPath);
+                return false;
+            }
+        }
+
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("Failed to check the status of Firmware"
+                   " Error: {ERROR}",
+                   "ERROR", e);
+        return false;
+    }
+}
+
+bool isFRUInternalOk()
+{
+    // TODO:Needs to Validate the Internal Use Area of the BMC FRU for
+    // corruption.
+    return true;
+}
+
 auto ipmiAppGetSelfTestResults() -> ipmi::RspType<uint8_t, uint8_t>
 {
     // Byte 2:
@@ -788,52 +1025,29 @@ auto ipmiAppGetSelfTestResults() -> ipmi::RspType<uint8_t, uint8_t>
     //      [2] 1b = Internal Use Area of BMC FRU corrupted.
     //      [1] 1b = controller update 'boot block' firmware corrupted.
     //      [0] 1b = controller operational firmware corrupted.
-    uint8_t testResultByte2 = 0x00, testResultByte1 = 0x00;
 
-    sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+    uint8_t errorBits = 0;
 
-    /* Get the status of SEL device (bit[7]) */
-    auto selAvailableCall = bus.new_method_call(
-        ipmiLoggingService, ipmiLoggingObject, propIntf, "GetAll");
-    selAvailableCall.append(ipmiLoggingIntf);
+    // Build error bitfield
+    if (!isSELAccessible())
+        errorBits |= SEL_INACCESSIBLE;
+    if (!isSDRRepoAccessible())
+        errorBits |= SDR_REPO_INACCESSIBLE;
+    if (!isFRUAccessible())
+        errorBits |= FRU_INACCESSIBLE;
+    if (!isIPMBSignalOk())
+        errorBits |= IPMB_SIGNAL_FAIL;
+    if (isSDRRepoEmpty())
+        errorBits |= SDR_REPO_EMPTY;
+    if (!isFRUInternalOk())
+        errorBits |= FRU_INTERNAL_CORRUPT;
+    if (!isBootBlock_isOperationalFw_Ok())
+        errorBits |= BOOT_BLOCK_CORRUPT | OP_FW_CORRUPT;
 
-    try
-    {
-        auto selAvaiableReply = bus.call(selAvailableCall);
-        testResultByte2 &= ~(GST_SEL_FAIL_OFFSET);
-    }
-    catch (const std::exception& e)
-    {
-        lg2::error("SEL Repository update or self-initialization in progress. "
-                   "Interface: {INTERFACE}, Error: {ERROR}",
-                   "INTERFACE", ipmiLoggingIntf, "ERROR", e);
-        testResultByte2 |= GST_SEL_FAIL_OFFSET;
-    }
+    uint8_t testResult =
+        (0 == errorBits) ? GST_NO_ERROR : GST_CORRUPTED_DEVICES;
 
-    // TBD - sdr related information need to be implemented.
-
-    /* Get the status of FRU device (bit[5]) */
-    auto fruAvailableCall =
-        bus.new_method_call(fruService, fruObjectPath, propIntf, "GetAll");
-    fruAvailableCall.append(fruIntf);
-    try
-    {
-        auto fruAvailableReply = bus.call(fruAvailableCall);
-        testResultByte2 &= ~(GST_FRU_FAIL_OFFSET);
-    }
-    catch (const std::exception& e)
-    {
-        lg2::error("FRU Repository update or self-initialization in progress. "
-                   "Interface: {INTERFACE}, Error: {ERROR}",
-                   "INTERFACE", fruIntf, "ERROR", e);
-        testResultByte2 |= GST_FRU_FAIL_OFFSET;
-    }
-    // bit[4], bit[3], bit[2], bit[1], bit[0] are not support.
-
-    testResultByte1 =
-        (0 == testResultByte2) ? GST_NO_ERROR : GST_CORRUPTED_DEVICES;
-
-    return ipmi::responseSuccess(testResultByte1, testResultByte2);
+    return ipmi::responseSuccess(testResult, errorBits);
 }
 
 static constexpr size_t uuidBinaryLength = 16;
