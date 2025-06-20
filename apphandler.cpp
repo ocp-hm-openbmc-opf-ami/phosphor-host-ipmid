@@ -1838,6 +1838,17 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
         transferStatus = data1 & progressMask;
         return ipmi::responseSuccess();
     }
+
+    uint8_t setSelector = data1;
+    if (setSelector == 0) // First chunk has only 14 bytes.
+    {
+        uint8_t encoding = configData.at(0);
+        if (encoding > maxValidEncodingData)
+        {
+            return ipmi::responseInvalidFieldRequest();
+        }
+    }
+
     if (paramSelector == parameteroffset)
     {
         // Store data in JSON file
@@ -1867,15 +1878,10 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
         paramString = "";
     }
 
-    uint8_t setSelector = data1;
     size_t count = 0;
     if (setSelector == 0) // First chunk has only 14 bytes.
     {
         uint8_t encoding = configData.at(0);
-        if (encoding > maxValidEncodingData)
-        {
-            return ipmi::responseInvalidFieldRequest();
-        }
         globalEncoding.globalencoding = encoding;
         size_t stringLen = configData.at(1); // string length
         count = std::min(stringLen, smallChunkSize);
