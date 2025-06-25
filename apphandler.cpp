@@ -589,9 +589,13 @@ int convertVersion(std::string s, Revision& rev)
 
         // convert major
         {
-            std::string_view str = m[matches[0]].str();
-            auto [ptr, ec]{std::from_chars(str.begin(), str.end(), val)};
-            if (ec != std::errc() || ptr != str.begin() + str.size())
+            // Note Added this fix to address the Coverity issue, but it has not
+            // been verified because OneTree uses the intel-ipmi-oem GetDeviceId
+            // command handler.
+            std::string str = m[matches[0]].str();
+            auto [ptr, ec] =
+                std::from_chars(str.data(), str.data() + str.size(), val);
+            if (ec != std::errc() || ptr != str.data() + str.size())
             { // failed to convert major string
                 return -1;
             }
@@ -1882,6 +1886,10 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
     if (setSelector == 0) // First chunk has only 14 bytes.
     {
         uint8_t encoding = configData.at(0);
+        if (encoding > maxValidEncodingData)
+        {
+            return ipmi::responseInvalidFieldRequest();
+        }
         globalEncoding.globalencoding = encoding;
         size_t stringLen = configData.at(1); // string length
         count = std::min(stringLen, smallChunkSize);
