@@ -28,6 +28,8 @@
 #include <ipmid/message.hpp>
 #include <ipmid/oemrouter.hpp>
 #include <ipmid/types.hpp>
+#include <ipmid/utils.hpp>
+#include <nlohmann/json.hpp>
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/asio/connection.hpp>
 #include <sdbusplus/asio/object_server.hpp>
@@ -35,12 +37,13 @@
 #include <sdbusplus/bus.hpp>
 #include <sdbusplus/bus/match.hpp>
 #include <sdbusplus/timer.hpp>
-#include <ipmid/utils.hpp>
+
 #include <algorithm>
 #include <any>
 #include <exception>
 #include <filesystem>
 #include <forward_list>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <optional>
@@ -52,6 +55,8 @@
 // Channel number assignments
 static constexpr unsigned short sysInterface = 0x0F;
 static constexpr unsigned short dbusInterface = 0x08;
+using json = nlohmann::json;
+json extlogcmddata;
 
 namespace fs = std::filesystem;
 
@@ -60,13 +65,22 @@ using namespace phosphor::logging;
 // IPMI Spec, shared Reservation ID.
 static unsigned short selReservationID = 0xFFFF;
 static bool selReservationValid = false;
+static bool extlogenable = false;
+static uint8_t loglevel = 0;
+static uint8_t reqresloglevel = 0;
 
-const static constexpr char* serviceOOBInventoryConfig = "xyz.openbmc_project.OOBInventoryConfig";
-const static constexpr char* objPathMotherboard = "/xyz/openbmc_project/inventory/system/chassis/motherboard";
-const static constexpr char* interfaceControlBootOrder = "xyz.openbmc_project.Control.Boot.Order";
-const static constexpr char* propertyBootSourceOverrideEnabled = "BootSourceOverrideEnabled";
-const static constexpr char* objPathOobCrc = "/xyz/openbmc_project/OOBInventoryConfig/OobCrc";
-const static constexpr char* interfaceOobBiosConfigInventoryOobCrc = "xyz.openbmc_project.OobBiosConfigInventory.CRC.OobCrc";
+const static constexpr char* serviceOOBInventoryConfig =
+    "xyz.openbmc_project.OOBInventoryConfig";
+const static constexpr char* objPathMotherboard =
+    "/xyz/openbmc_project/inventory/system/chassis/motherboard";
+const static constexpr char* interfaceControlBootOrder =
+    "xyz.openbmc_project.Control.Boot.Order";
+const static constexpr char* propertyBootSourceOverrideEnabled =
+    "BootSourceOverrideEnabled";
+const static constexpr char* objPathOobCrc =
+    "/xyz/openbmc_project/OOBInventoryConfig/OobCrc";
+const static constexpr char* interfaceOobBiosConfigInventoryOobCrc =
+    "xyz.openbmc_project.OobBiosConfigInventory.CRC.OobCrc";
 const static constexpr char* propertyBootOverride = "BootOverride";
 
 unsigned short reserveSel(void)
@@ -512,6 +526,100 @@ uint8_t channelFromMessage(sdbusplus::message_t& msg)
     }
 } // namespace ipmi
 
+template <typename T>
+std::string toHexString(const T& value)
+{
+    std::ostringstream hexStream;
+    if constexpr (std::is_integral_v<T>)
+    { // Handle integer case
+        hexStream << "0x" << std::hex << std::setw(2) << std::setfill('0')
+                  << static_cast<uint8_t>(value);
+    }
+    else
+    {
+        for (const auto& byte : value)
+        {
+            hexStream << " 0x" << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<uint8_t>(byte);
+        }
+    }
+    return hexStream.str();
+};
+
+void LogIPMICmdReq(uint8_t ChannelNum, NetFn netFn, Cmd cmd, auto reqdata)
+{
+    if (extlogenable)
+    {
+        if (loglevel == 0)
+        {
+            if (reqresloglevel == 0 || reqresloglevel == 1)
+            {
+                sd_journal_send(
+                    "PRIORITY=%i", LOG_INFO, "EXTLOG_MESSAGE_ID=IPMI Command",
+                    "EXTLOG_MESSAGE_ARGS=Channel Num: %d, NetFn: 0x%02x, Cmd : 0x%02x ,Request data: %s",
+                    ChannelNum, netFn, cmd,
+                    toHexString(reqdata->payload.raw).c_str(), NULL);
+            }
+        }
+        else
+        {
+            std::string NetFn = toHexString(netFn);
+            if (extlogcmddata.contains(NetFn) &&
+                (std::find(extlogcmddata[NetFn].begin(),
+                           extlogcmddata[NetFn].end(), toHexString(cmd)) !=
+                 extlogcmddata[NetFn].end()))
+            {
+                if (reqresloglevel == 0 || reqresloglevel == 1)
+                {
+                    sd_journal_send(
+                        "PRIORITY=%i", LOG_INFO,
+                        "EXTLOG_MESSAGE_ID=IPMI Command",
+                        "EXTLOG_MESSAGE_ARGS=Channel Num: %d, NetFn: 0x%02x, Cmd : 0x%02x ,Request data: %s",
+                        ChannelNum, netFn, cmd,
+                        toHexString(reqdata->payload.raw).c_str(), NULL);
+                }
+            }
+        }
+    }
+}
+
+void LogIPMICmdRes(uint8_t ChannelNum, NetFn netFn, Cmd cmd, auto resdata)
+{
+    if (extlogenable)
+    {
+        if (loglevel == 0)
+        {
+            if (reqresloglevel == 0 || reqresloglevel == 2)
+            {
+                sd_journal_send(
+                    "PRIORITY=%i", LOG_INFO, "EXTLOG_MESSAGE_ID=IPMI Command",
+                    "EXTLOG_MESSAGE_ARGS=Channel Num: %d, NetFn: 0x%02x, Cmd : 0x%02x, CC : 0x%02x ,Response data: %s",
+                    ChannelNum, netFn, cmd, resdata->cc,
+                    toHexString(resdata->payload.raw).c_str(), NULL);
+            }
+        }
+        else
+        {
+            std::string NetFn = toHexString(netFn);
+            if (extlogcmddata.contains(NetFn) &&
+                (std::find(extlogcmddata[NetFn].begin(),
+                           extlogcmddata[NetFn].end(), toHexString(cmd)) !=
+                 extlogcmddata[NetFn].end()))
+            {
+                if (reqresloglevel == 0 || reqresloglevel == 2)
+                {
+                    sd_journal_send(
+                        "PRIORITY=%i", LOG_INFO,
+                        "EXTLOG_MESSAGE_ID=IPMI Command",
+                        "EXTLOG_MESSAGE_ARGS=Channel Num: %d, NetFn: 0x%02x, Cmd : 0x%02x ,CC : 0x%02x,Response data: %s",
+                        ChannelNum, netFn, cmd, resdata->cc,
+                        toHexString(resdata->payload.raw).c_str(), NULL);
+                }
+            }
+        }
+    }
+}
+
 /* called from sdbus async server context */
 auto executionEntry(boost::asio::yield_context yield, sdbusplus::message_t& m,
                     NetFn netFn, uint8_t lun, Cmd cmd, ipmi::SecureBuffer& data,
@@ -607,7 +715,10 @@ auto executionEntry(boost::asio::yield_context yield, sdbusplus::message_t& m,
         rqSA, hostIdx, yield);
     auto request = std::make_shared<ipmi::message::Request>(
         ctx, std::forward<ipmi::SecureBuffer>(data));
+
+    LogIPMICmdReq(channel, netFn, cmd, request);  // log IPMI command Req data
     message::Response::ptr response = executeIpmiCommand(request);
+    LogIPMICmdRes(channel, netFn, cmd, response); // log IPMI command Req data
 
     return dbusResponse(response->cc, response->payload.raw);
 }
@@ -844,18 +955,86 @@ std::unique_ptr<phosphor::host::command::Manager>& ipmid_get_host_cmd_manager()
     return cmdManager;
 }
 
-void MonitorIPMIBootOverrideOpt(sdbusplus::message::message& msg) {
+void MonitorIPMIBootOverrideOpt(sdbusplus::message::message& msg)
+{
     std::string interface;
     std::map<std::string, std::variant<bool>> properties;
     auto bus = sdbusplus::bus::new_default();
 
     msg.read(interface, properties);
-    if (properties.find("Enabled") != properties.end() && (std::get<bool>(properties["Enabled"])))
+    if (properties.find("Enabled") != properties.end() &&
+        (std::get<bool>(properties["Enabled"])))
     {
-       ipmi::setDbusProperty(bus, serviceOOBInventoryConfig, objPathMotherboard, interfaceControlBootOrder, propertyBootSourceOverrideEnabled, "Disabled");
-       ipmi::setDbusProperty(bus, serviceOOBInventoryConfig, objPathOobCrc, interfaceOobBiosConfigInventoryOobCrc, propertyBootOverride, static_cast<uint64_t>(0));
+        ipmi::setDbusProperty(bus, serviceOOBInventoryConfig,
+                              objPathMotherboard, interfaceControlBootOrder,
+                              propertyBootSourceOverrideEnabled, "Disabled");
+        ipmi::setDbusProperty(bus, serviceOOBInventoryConfig, objPathOobCrc,
+                              interfaceOobBiosConfigInventoryOobCrc,
+                              propertyBootOverride, static_cast<uint64_t>(0));
     }
+}
 
+void GetInitialExtlogConfigs()
+{
+    auto bus = sdbusplus::bus::new_default();
+    std::string objectPath = "/xyz/openbmc_project/Extlog/ExtlogConfigs";
+    std::string interfaceName = "xyz.openbmc_project.Extlog.ExtlogConfigs";
+
+    try
+    {
+        auto methodCall = bus.new_method_call(
+            "xyz.openbmc_project.Extlog", objectPath.c_str(),
+            "org.freedesktop.DBus.Properties", "GetAll");
+
+        methodCall.append(interfaceName);
+        auto reply = bus.call(methodCall);
+
+        std::map<std::string, std::variant<bool, uint8_t>> properties;
+        reply.read(properties);
+        for (const auto& [key, value] : properties)
+        {
+            if (key == "EnableExtlog")
+            {
+                extlogenable = std::get<bool>(value);
+            }
+            else if (key == "LogLevel")
+            {
+                loglevel = std::get<uint8_t>(value);
+            }
+            else if (key == "ReqResLogLevel")
+            {
+                reqresloglevel = std::get<uint8_t>(value);
+            }
+        }
+    }
+    catch (const sdbusplus::exception::SdBusError& e)
+    {
+        lg2::error("DBus error: {}", "ERROR", e.what());
+    }
+}
+
+void onExtlogPropertyChanged(sdbusplus::message_t& msg)
+{
+    std::string interfaceName;
+    std::map<std::string, std::variant<uint8_t, bool>> changedProperties;
+
+    msg.read(interfaceName, changedProperties);
+
+    for (const auto& [key, value] : changedProperties)
+    {
+        if (key == "EnableExtlog")
+        {
+            extlogenable = std::get<bool>(value);
+        }
+        else if (key == "LogLevel")
+        {
+            loglevel = std::get<uint8_t>(value);
+        }
+        else if (key == "ReqResLogLevel")
+        {
+            reqresloglevel = std::get<uint8_t>(value);
+        }
+    }
 }
 
 // These are symbols that are present in libipmid, but not expected
@@ -902,6 +1081,27 @@ int main(int argc, char* argv[])
                                              handleLegacyIpmiCommand);
 #endif /* ALLOW_DEPRECATED_API */
 
+    std::ifstream file(
+        "/etc/extlog-configs/LogIndividualCmds.json"); // Open JSON file
+    if (!file)
+    {
+        lg2::error("Error: Unable to open JSON file.\n");
+    }
+    else
+    {
+        file >> extlogcmddata; // Read JSON file into json objecti
+        file.close();
+    }
+
+    GetInitialExtlogConfigs();
+
+    auto matchextlog = sdbusplus::bus::match::match(
+        *sdbusp,
+        "type='signal',interface='org.freedesktop.DBus.Properties',"
+        "member='PropertiesChanged',path='/xyz/openbmc_project/Extlog/ExtlogConfigs',"
+        "arg0='xyz.openbmc_project.Extlog.ExtlogConfigs'",
+        onExtlogPropertyChanged);
+
     // set up bus name watching to match channels with bus names
     sdbusplus::bus::match_t nameOwnerChanged(
         *sdbusp,
@@ -930,14 +1130,13 @@ int main(int argc, char* argv[])
                                       "xyz.openbmc_project.Ipmi.Server");
     iface->register_method("execute", ipmi::executionEntry);
     iface->initialize();
-    
+
     auto match = sdbusplus::bus::match::match(
         *sdbusp,
         "type='signal',interface='org.freedesktop.DBus.Properties',"
         "member='PropertiesChanged',path='/xyz/openbmc_project/control/host0/boot',"
         "arg0='xyz.openbmc_project.Object.Enable'",
-        MonitorIPMIBootOverrideOpt
-    );
+        MonitorIPMIBootOverrideOpt);
 
     io->run();
 

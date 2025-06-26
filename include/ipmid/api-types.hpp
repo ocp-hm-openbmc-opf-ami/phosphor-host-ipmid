@@ -392,6 +392,11 @@ constexpr Cc ccCommandNotAvailable = 0xD5;
 constexpr Cc ccCommandDisabled = 0xD6;
 constexpr Cc ccUnspecifiedError = 0xFF;
 constexpr Cc ccNeedToChangeUserPassword = 0x18;
+constexpr Cc ccReqCannotPerformKeyLocked = 0x80;
+constexpr Cc ccReqInsufficientKeyBytes = 0x81;
+constexpr Cc ccReqToManyKeyBytes = 0x82;
+constexpr Cc ccReqKeyDoesNotMeetCriteria = 0x83;
+constexpr Cc ccReqKRIsNotUsed = 0x84;
 /* ipmi often has two return types:
  * 1. Failure: CC is non-zero; no trailing data
  * 2. Success: CC is zero; trailing data (usually a fixed type)
@@ -554,6 +559,26 @@ static inline auto responseUnspecifiedError()
 static inline auto responseNeedToChangeUserPassword()
 {
     return response(ccNeedToChangeUserPassword);
+}
+static inline auto responseReqCannotPerformKeyLocked()
+{
+    return response(ccReqCannotPerformKeyLocked);
+}
+static inline auto responseReqInsufficientKeyBytes()
+{
+    return response(ccReqInsufficientKeyBytes);
+}
+static inline auto responseReqToManyKeyBytes()
+{
+    return response(ccReqToManyKeyBytes);
+}
+static inline auto responseReqKeyDoesNotMeetCriteria()
+{
+    return response(ccReqKeyDoesNotMeetCriteria);
+}
+static inline auto responseReqKRIsNotUsed()
+{
+    return response(ccReqKRIsNotUsed);
 }
 
 } // namespace ipmi

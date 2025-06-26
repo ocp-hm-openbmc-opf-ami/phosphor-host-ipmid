@@ -28,6 +28,9 @@ constexpr auto maxPriority = 7;
 constexpr auto CHANNEL_INTF_SERVICE="xyz.openbmc_project.Ipmi.Channel";
 constexpr auto SESSION_ROOT_PATH = "/xyz/openbmc_project/ipmi/session";
 constexpr auto INTF_IPHEADER = "xyz.openbmc_project.Ipmi.IPHeader";
+constexpr auto INTF_NCSI = "xyz.openbmc_project.Network.NCSIConfiguration";
+constexpr auto INTF_NCSI_SERVICE = "xyz.openbmc_project.Network";
+constexpr auto INTF_NCSI_ROOT_PATH = "/xyz/openbmc_project/network";
 
 /** @brief IPMI LAN Parameters */
 enum class LanParam : uint8_t
@@ -78,6 +81,14 @@ enum class LanParam : uint8_t
     IPv6DynamicRouterInfoPrefixValue=77,
     IPv6SLAACTimingConfigurationSupport=79,
     IPv6SLAACTimingConfiguration=80
+};
+
+/** @brief IPMI LAN AMI OEM Parameters */
+enum class LanAMIOEMParam : uint8_t
+{
+    NCSIMode = 192,
+    NCSIUsingPort = 193,
+    NCSIChannelList = 194,
 };
 
 /** @brief IPMI IP Origin Types */

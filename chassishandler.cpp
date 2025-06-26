@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <endian.h>
 #include <limits.h>
+#include <mapper.h>
 #include <netinet/in.h>
 
 #include <ipmid/api.hpp>
@@ -18,6 +19,7 @@
 #include <sdbusplus/timer.hpp>
 #include <settings.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
+#include <xyz/openbmc_project/Control/Boot/DeviceInstance/server.hpp>
 #include <xyz/openbmc_project/Control/Boot/Mode/server.hpp>
 #include <xyz/openbmc_project/Control/Boot/Source/server.hpp>
 #include <xyz/openbmc_project/Control/Boot/Type/server.hpp>
@@ -36,6 +38,7 @@
 #include <sstream>
 #include <string>
 
+#define SET_PARM_BOOT_FLAGS_BOOT_TYPE_UEFI 0x20
 std::unique_ptr<sdbusplus::Timer> identifyTimer
     __attribute__((init_priority(101)));
 
@@ -56,6 +59,7 @@ static constexpr size_t addrSizeOffset = 8;
 static constexpr size_t macOffset = 9;
 static constexpr size_t addrTypeOffset = 16;
 static constexpr size_t ipAddrOffset = 17;
+static bool biosUefiBoot = true; // default UEFI boot
 
 namespace ipmi
 {
@@ -130,6 +134,8 @@ constexpr auto bootSourceIntf = "xyz.openbmc_project.Control.Boot.Source";
 constexpr auto bootSettingsOneTimePath =
     "/xyz/openbmc_project/control/host0/boot/one_time";
 constexpr auto bootOneTimeIntf = "xyz.openbmc_project.Object.Enable";
+constexpr auto bootDevInstanceIntf =
+    "xyz.openbmc_project.Control.Boot.DeviceInstance";
 
 constexpr auto powerRestoreIntf =
     "xyz.openbmc_project.Control.Power.RestorePolicy";
@@ -144,8 +150,9 @@ settings::Objects& getObjects()
     if (objectsPtr == nullptr)
     {
         objectsPtr = std::make_unique<settings::Objects>(
-            dbus, std::vector<std::string>{bootModeIntf, bootTypeIntf,
-                                           bootSourceIntf, powerRestoreIntf});
+            dbus,
+            std::vector<std::string>{bootModeIntf, bootTypeIntf, bootSourceIntf,
+                                     bootDevInstanceIntf, powerRestoreIntf});
     }
     return *objectsPtr;
 }
@@ -329,8 +336,7 @@ std::string getAddrStr(uint8_t family, uint8_t* data, uint8_t offset,
     {
         case AF_INET:
         {
-            struct sockaddr_in addr4
-            {};
+            struct sockaddr_in addr4{};
             std::memcpy(&addr4.sin_addr.s_addr, &data[offset], addrSize);
 
             inet_ntop(AF_INET, &addr4.sin_addr, ipAddr, INET_ADDRSTRLEN);
@@ -339,8 +345,7 @@ std::string getAddrStr(uint8_t family, uint8_t* data, uint8_t offset,
         }
         case AF_INET6:
         {
-            struct sockaddr_in6 addr6
-            {};
+            struct sockaddr_in6 addr6{};
             std::memcpy(&addr6.sin6_addr.s6_addr, &data[offset], addrSize);
 
             inet_ntop(AF_INET6, &addr6.sin6_addr, ipAddr, INET6_ADDRSTRLEN);
@@ -751,8 +756,9 @@ ipmi::RspType<> ipmiSetChassisCap(
     {
         if ((bridgeDeviceAddr.value() & ~chassisCapAddrMask) != 0)
         {
-            lg2::error("Unsupported request parameter(Bridge Addr) for REQ={REQ}",
-                   "REQ", lg2::hex, bridgeDeviceAddr.value());
+            lg2::error(
+                "Unsupported request parameter(Bridge Addr) for REQ={REQ}",
+                "REQ", lg2::hex, bridgeDeviceAddr.value());
             return ipmi::responseInvalidFieldRequest();
         }
     }
@@ -1124,7 +1130,7 @@ ipmi::RspType<bool,    // Power is on
               bool,    // last power down caused by a Power overload
               bool,    // last power down caused by a power interlock
               bool,    // last power down caused by power fault
-              bool, // last ‘Power is on’ state was entered via IPMI command
+              bool,    // last ‘Power is on’ state was entered via IPMI command
               uint3_t, // reserved
 
               bool,    // Chassis intrusion active
@@ -1240,8 +1246,8 @@ enum class IpmiRestartCause
     SoftReset = 0xa,
 };
 
-static IpmiRestartCause
-    restartCauseToIpmiRestartCause(State::Host::RestartCause cause)
+static IpmiRestartCause restartCauseToIpmiRestartCause(
+    State::Host::RestartCause cause)
 {
     switch (cause)
     {
@@ -1699,6 +1705,39 @@ static ipmi::Cc setBootType(ipmi::Context::ptr& ctx, const Type::Types& type)
     return ipmi::ccSuccess;
 }
 
+static ipmi_ret_t setBootDeviceInstance(ipmi::Context::ptr& ctx,
+                                        const uint32_t& devInstance)
+{
+    using namespace chassis::internal;
+    using namespace chassis::internal::cache;
+    settings::Objects& objects = getObjects();
+    std::tuple<settings::Path, settings::boot::OneTimeEnabled> bootSetting;
+    try
+    {
+        bootSetting = settings::boot::setting(objects, bootDevInstanceIntf);
+    }
+    catch (const std::exception& e)
+    {
+        // Return immediately if BootType interface is not present.
+        // This interface is not relevant for some Host architectures
+        // (for example POWER). In this case we don't won't IPMI to
+        // return an error, but want to just skip this function.
+        return ipmi::ccSuccess;
+    }
+    const auto& bootdevInstanceSetting = std::get<settings::Path>(bootSetting);
+    boost::system::error_code ec = ipmi::setDbusProperty(
+        ctx, objects.service(bootdevInstanceSetting, bootDevInstanceIntf),
+        bootdevInstanceSetting, bootDevInstanceIntf, "DeviceInstance",
+        devInstance);
+    if (ec)
+    {
+        lg2::error("Error in DeviceInstance Set: {ERROR}", "ERROR",
+                   ec.message());
+        return ipmi::ccUnspecifiedError;
+    }
+    return ipmi::ccSuccess;
+}
+
 /** @brief Get the property value for boot override enable
  *  @param[in] ctx - context pointer
  *  @param[out] enable - boot override enable
@@ -1845,8 +1884,8 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
     bool flagvalid;
 
     uint8_t parameter = static_cast<uint8_t>(bootOptionParameter);
-    uint8_t ParamByte = parameter /
-                        8; // Calculate the index in ParameterValid array
+    uint8_t ParamByte =
+        parameter / 8; // Calculate the index in ParameterValid array
     uint8_t ParamBit = parameter % 8; // Calculate the bit position in the index
 
     if (ParameterValid[ParamByte] & (1 << ParamBit))
@@ -1884,7 +1923,166 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
                       uint5_t{bootFlagValidBitClr}, uint3_t{});
         return ipmi::responseSuccess(std::move(response));
     }
+    if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
+        BootOptionParameter::bootServicePartitionSelect)
+    {
+        uint8_t servicePartition;
+        std::string service;
+        boost::system::error_code ec = getService(
+            ctx, "xyz.openbmc_project.Control.Boot.ServicePartitionSelect",
+            chassis::internal::bootSettingsPath, service);
+        if (!ec)
+        {
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.ServicePartitionSelect",
+                "ServicePartition", servicePartition);
+            if (ec)
+            {
+                lg2::error("Error in ServicePartitionSelect Get: {ERROR}",
+                           "ERROR", ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+        response.pack(bootOptionParameter, uint1_t{}, servicePartition);
+        return ipmi::responseSuccess(std::move(response));
+    }
 
+    if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
+        BootOptionParameter::bootServicePartitionScan)
+    {
+        bool requestScan;
+        bool partitionDiscovered;
+        std::string service;
+        boost::system::error_code ec = getService(
+            ctx, "xyz.openbmc_project.Control.Boot.ServicePartitionScan",
+            chassis::internal::bootSettingsPath, service);
+        if (!ec)
+        {
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.ServicePartitionScan",
+                "RequestScan", requestScan);
+            if (ec)
+            {
+                lg2::error("Error in requestScan Get: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.ServicePartitionScan",
+                "PartitionDiscovered", partitionDiscovered);
+            if (ec)
+            {
+                lg2::error("Error in partitionDiscovered Get: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+        response.pack(bootOptionParameter, uint1_t{}, partitionDiscovered,
+		      requestScan);
+        return ipmi::responseSuccess(std::move(response));
+    }
+
+    if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
+        BootOptionParameter::bootInitiatorInfo)
+    {
+        uint8_t channel;
+        uint32_t sessionID;
+        uint32_t timestamp;
+        std::string service;
+        boost::system::error_code ec = getService(
+            ctx, "xyz.openbmc_project.Control.Boot.BootInitiatorInfo",
+            chassis::internal::bootSettingsPath, service);
+        if (!ec)
+        {
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootInitiatorInfo", "Channel",
+                channel);
+            if (ec)
+            {
+                lg2::error("Error in Channel Get: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootInitiatorInfo",
+                "SessionID", sessionID);
+            if (ec)
+            {
+                lg2::error("Error in SessionID Get: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootInitiatorInfo",
+                "Timestamp", timestamp);
+            if (ec)
+            {
+                lg2::error("Error in Channel Get: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+        response.pack(bootOptionParameter, uint1_t{}, uint4_t{channel},
+                      uint4_t{}, sessionID, timestamp);
+        return ipmi::responseSuccess(std::move(response));
+    }
+
+    if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
+        BootOptionParameter::bootInitiatorMailbox)
+    {
+        uint8_t block;
+        uint64_t lower;
+        uint64_t upper;
+        std::string service;
+        boost::system::error_code ec =
+            getService(ctx, "xyz.openbmc_project.Control.Boot.BootMailbox",
+                       chassis::internal::bootSettingsPath, service);
+        if (!ec)
+        {
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootMailbox", "BlockSelector",
+                block);
+            if (ec)
+            {
+                lg2::error("Error in L Get: {ERROR}", "ERROR", ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootMailbox",
+                std::string("Mailbox" + std::to_string(block) + "L"), lower);
+            if (ec)
+            {
+                lg2::error("Error in lower Get: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseParmOutOfRange();
+            }
+
+            ec = ipmi::getDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootMailbox",
+                std::string("Mailbox" + std::to_string(block) + "U"), upper);
+            if (ec)
+            {
+                lg2::error("Error in upper Get: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseParmOutOfRange();
+            }
+        }
+        response.pack(bootOptionParameter, uint1_t{}, block, lower, upper);
+        return ipmi::responseSuccess(std::move(response));
+    }
     /*
      * Parameter #5 means boot flags. Please refer to 28.13 of ipmi doc.
      * This is the only parameter used by petitboot.
@@ -1917,7 +2115,41 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
             {
                 return ipmi::response(rc);
             }
+            // obtain Device Instance Selector, data[4]:bit[4:0]
+            uint32_t deviceInstance = 0;
+            std::string result;
+            boost::system::error_code ec;
+            settings::Objects& objects = cache::getObjects();
+            auto bootSetting = settings::boot::setting(objects, bootSourceIntf);
+            bool bootDeviceInstance = true;
+            try
+            {
+                bootSetting =
+                    settings::boot::setting(objects, bootDevInstanceIntf);
+            }
+            catch (const std::exception& e)
+            {
+                bootDeviceInstance = false;
+            }
+            if (bootDeviceInstance)
+            {
+                const auto& bootDeviceInstanceSetting =
+                    std::get<settings::Path>(bootSetting);
+                ec = ipmi::getDbusProperty(
+                    ctx,
+                    objects.service(bootDeviceInstanceSetting,
+                                    bootDevInstanceIntf),
+                    bootDeviceInstanceSetting, bootDevInstanceIntf,
+                    "DeviceInstance", deviceInstance);
 
+                if (ec)
+                {
+                    lg2::error("ipmiChassisGetSysBootOptions: Error in "
+                               "DeviceInstance Get");
+                    report<InternalFailure>();
+                    return ipmi::responseUnspecifiedError();
+                }
+            }
             bootOption = sourceDbusToIpmi.at(bootSource);
             if ((Mode::Modes::Regular == bootMode) &&
                 (Source::Sources::Default == bootSource))
@@ -1940,6 +2172,11 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
 
             uint1_t permanent = oneTimeEnabled ? 0 : 1;
 
+            if (biosUefiBoot)
+            {
+                biosBootType = 0x01;
+            }
+
             bool valid;
             rc = getBootEnable(ctx, valid);
             if (rc != ipmi::ccSuccess)
@@ -1953,7 +2190,7 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
                           uint1_t{biosBootType}, uint1_t{permanent},
                           uint1_t{validFlag}, uint2_t{}, uint4_t{bootOption},
                           uint1_t{}, cmosClear, uint8_t{}, uint8_t{},
-                          uint8_t{});
+                          uint5_t{deviceInstance}, uint3_t{});
             return ipmi::responseSuccess(std::move(response));
         }
         catch (const InternalFailure& e)
@@ -2005,10 +2242,9 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
     return ipmi::responseUnspecifiedError();
 }
 
-ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
-                                             uint7_t parameterSelector,
-                                             bool flagvalid,
-                                             ipmi::message::Payload& data)
+ipmi::RspType<> ipmiChassisSetSysBootOptions(
+    ipmi::Context::ptr ctx, uint7_t parameterSelector, bool flagvalid,
+    ipmi::message::Payload& data)
 {
     using namespace boot_options;
     ipmi::Cc rc;
@@ -2101,7 +2337,250 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
         transferStatus = static_cast<uint8_t>(setInProgressFlag);
         return ipmi::responseSuccess();
     }
+    if (types::enum_cast<BootOptionParameter>(parameterSelector) ==
+        BootOptionParameter::bootServicePartitionSelect)
+    {
+        uint8_t servicePartition;
+        std::string service;
+        if (data.unpack(servicePartition) != 0 || !data.fullyUnpacked())
+        {
+            return ipmi::responseReqDataLenInvalid();
+        }
 
+        boost::system::error_code ec = getService(
+            ctx, "xyz.openbmc_project.Control.Boot.ServicePartitionSelect",
+            chassis::internal::bootSettingsPath, service);
+        if (!ec)
+        {
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.ServicePartitionSelect",
+                "ServicePartition", servicePartition);
+            if (ec)
+            {
+                lg2::error("Error in servicePartition Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+        return ipmi::response(ipmi::ccSuccess);
+    }
+    if (types::enum_cast<BootOptionParameter>(parameterSelector) ==
+        BootOptionParameter::bootServicePartitionScan)
+    {
+        uint6_t reserved;
+        bool requestScan;
+        bool partitionDiscovered;
+        std::string service;
+
+        if (data.unpack(partitionDiscovered, requestScan, reserved) != 0 ||
+            !data.fullyUnpacked())
+        {
+            return ipmi::responseReqDataLenInvalid();
+        }
+
+        boost::system::error_code ec = getService(
+            ctx, "xyz.openbmc_project.Control.Boot.ServicePartitionScan",
+            chassis::internal::bootSettingsPath, service);
+        if (!ec)
+        {
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.ServicePartitionScan",
+                "RequestScan", requestScan);
+            if (ec)
+            {
+                lg2::error("Error in ServicePartitionSelect Set: {ERROR}",
+                           "ERROR", ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.ServicePartitionScan",
+                "PartitionDiscovered", partitionDiscovered);
+            if (ec)
+            {
+                lg2::error("Error in partitionDiscovered Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+        return ipmi::response(ipmi::ccSuccess);
+    }
+
+    if (types::enum_cast<BootOptionParameter>(parameterSelector) ==
+        BootOptionParameter::bootInitiatorInfo)
+    {
+        uint4_t channel;
+        uint4_t rsvd;
+        uint32_t sessionID;
+        uint32_t timestamp;
+        std::string service;
+
+        if (data.unpack(channel, rsvd, sessionID, timestamp) != 0 ||
+            !data.fullyUnpacked())
+        {
+            return ipmi::responseReqDataLenInvalid();
+        }
+
+        boost::system::error_code ec = getService(
+            ctx, "xyz.openbmc_project.Control.Boot.BootInitiatorInfo",
+            chassis::internal::bootSettingsPath, service);
+
+        if (!ec)
+        {
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootInitiatorInfo", "Channel",
+                uint8_t{channel});
+            if (ec)
+            {
+                lg2::error("Error in Channel Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootInitiatorInfo",
+                "SessionID", sessionID);
+            if (ec)
+            {
+                lg2::error("Error in sessionID Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootInitiatorInfo",
+                "Timestamp", timestamp);
+            if (ec)
+            {
+                lg2::error("Error in Timestamp Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+        return ipmi::response(ipmi::ccSuccess);
+    }
+
+    if (types::enum_cast<BootOptionParameter>(parameterSelector) ==
+        BootOptionParameter::bootInitiatorMailbox)
+    {
+        uint8_t block;
+        std::vector<uint8_t> inBytes;
+        uint64_t lower;
+        uint64_t upper;
+        uint64_t inLower;
+        uint64_t inUpper;
+        size_t i = 0;
+        std::string service;
+
+        if (data.unpack(inBytes) || !data.fullyUnpacked())
+        {
+            return ipmi::responseReqDataLenInvalid();
+        }
+
+        // The block index isn't given.
+        if (inBytes.empty())
+        {
+            return ipmi::responseReqDataLenInvalid();
+        }
+
+        // The BlockSelector is in the first byte of message
+        block = inBytes.front();
+        inBytes.erase(inBytes.begin());
+
+        // Filling data up to 16 bytes
+        for (i = 0; i < inBytes.size() && i < 16; i++)
+        {
+            const auto& byte = inBytes[i];
+            if (i < 8)
+            {
+                inLower &= ~(((uint64_t)0xFF) << ((i % 8) * 8)); // clear
+                inLower |= (((uint64_t)byte) << ((i % 8) * 8));  // set
+            }
+            else
+            {
+                inUpper &= ~(((uint64_t)0xFF) << ((i % 8) * 8)); // clear
+                inUpper |= (((uint64_t)byte) << ((i % 8) * 8));  // set
+            }
+        }
+
+        // Only select the block
+        if (inBytes.size() == 1)
+        {
+            return ipmi::responseSuccess();
+        }
+
+        boost::system::error_code ec =
+            getService(ctx, "xyz.openbmc_project.Control.Boot.BootMailbox",
+                       chassis::internal::bootSettingsPath, service);
+
+        if (!ec)
+        {
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootMailbox", "BlockSelector",
+                block);
+            if (ec)
+            {
+                lg2::error("Error in block Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+
+        ec = ipmi::getDbusProperty(
+            ctx, service, chassis::internal::bootSettingsPath,
+            "xyz.openbmc_project.Control.Boot.BootMailbox",
+            std::string("Mailbox" + std::to_string(block) + "L"), lower);
+        if (ec)
+        {
+            lg2::error("Error in lower Get: {ERROR}", "ERROR", ec.message());
+            return ipmi::responseUnspecifiedError();
+        }
+
+        ec = ipmi::getDbusProperty(
+            ctx, service, chassis::internal::bootSettingsPath,
+            "xyz.openbmc_project.Control.Boot.BootMailbox",
+            std::string("Mailbox" + std::to_string(block) + "U"), upper);
+        if (ec)
+        {
+            lg2::error("Error in upper Get: {ERROR}", "ERROR", ec.message());
+            return ipmi::responseUnspecifiedError();
+        }
+
+        if (!ec)
+        {
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootMailbox",
+                std::string("Mailbox" + std::to_string(block) + "L"), inLower);
+            if (ec)
+            {
+                lg2::error("Error in inLower Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+
+        if (!ec)
+        {
+            ec = ipmi::setDbusProperty(
+                ctx, service, chassis::internal::bootSettingsPath,
+                "xyz.openbmc_project.Control.Boot.BootMailbox",
+                std::string("Mailbox" + std::to_string(block) + "U"), inUpper);
+            if (ec)
+            {
+                lg2::error("Error in inUpper Set: {ERROR}", "ERROR",
+                           ec.message());
+                return ipmi::responseUnspecifiedError();
+            }
+        }
+        return ipmi::response(ipmi::ccSuccess);
+    }
     /*  000101
      * Parameter #5 means boot flags. Please refer to 28.13 of ipmi doc.
      * This is the only parameter used by petitboot.
@@ -2138,11 +2617,23 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
         }
 
         /*currently below support not available */
-        if (deviceInstance || biosInfo || data3 || (cmosClear == true) ||
+        if (biosInfo || data3 || (cmosClear == true) ||
             (lockKeyboard == true) || (lockOutResetButton == true) ||
             (screenBlank == true))
         {
             return ipmi::responseParmNotSupported();
+        }
+
+        /* make sure paremeter is valid */
+        if (flagvalid == true)
+        {
+            biosUefiBoot =
+                (parameterSelector & SET_PARM_BOOT_FLAGS_BOOT_TYPE_UEFI) ==
+                SET_PARM_BOOT_FLAGS_BOOT_TYPE_UEFI;
+        }
+        else
+        {
+            biosUefiBoot = true; // Set default boot type UEFI
         }
 
         using namespace chassis::internal;
@@ -2194,8 +2685,15 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
                 rc = setBootType(ctx, typeItr->second);
                 if (rc != ipmi::ccSuccess)
                 {
-                    return ipmi::response(rc);
+                    return ipmi::responseUnspecifiedError();
                 }
+            }
+
+            rc = setBootDeviceInstance(ctx,
+                                       static_cast<uint32_t>(deviceInstance));
+            if (rc != ipmi::ccSuccess)
+            {
+                return ipmi::responseUnspecifiedError();
             }
 
             if (modeIpmiToDbus.end() != modeItr)
@@ -2218,9 +2716,9 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(ipmi::Context::ptr ctx,
                     }
                 }
             }
-            if ((modeIpmiToDbus.end() == modeItr) &&
-                (typeIpmiToDbus.end() == typeItr) &&
-                (sourceIpmiToDbus.end() == sourceItr))
+	    if (((modeIpmiToDbus.end() == modeItr) &&
+		 (sourceIpmiToDbus.end() == sourceItr)) ||
+		 (typeIpmiToDbus.end() == typeItr))
             {
                 // return error if boot option is not supported
                 lg2::error(
