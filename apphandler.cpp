@@ -61,6 +61,7 @@ static constexpr auto activationIntf =
 static constexpr auto softwareRoot = "/xyz/openbmc_project/software";
 static constexpr const char* configFile = "/var/lib/ipmi/system_info.json";
 static constexpr uint8_t parameteroffset = 3;
+static constexpr uint8_t systemNameMax = 14;
 
 /* Get Self Test Result dbus sources */
 
@@ -1600,7 +1601,7 @@ static std::string sysInfoReadSystemName()
     {
         perror("System info parameter: system name");
     }
-    return hostname;
+    return std::string(hostname).substr(0, systemNameMax);
 }
 
 static constexpr uint8_t paramRevision = 0x11;
