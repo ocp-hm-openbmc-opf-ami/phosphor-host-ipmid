@@ -299,7 +299,7 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
                         std::optional<uint8_t> prefix)
 {
     auto ifaddr = getIfAddr4(bus, params);
-    if (!ifaddr && !address)
+    if (stdplus::toStr(ifaddr->address).empty() && stdplus::toStr(*address).empty())
     {
        lg2::error("Missing address for IPv4 assignment");
         elog<InternalFailure>();
@@ -1552,8 +1552,8 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     // a completely different Set LAN Configuration
                     // subcommand.
                     IsDHCP = true;
-                    channelCall<reconfigureIfAddr4>(channel, std::nullopt, std::nullopt);
                     channelCall<setEthProp<bool>>(channel, "DHCP4", true);
+		    channelCall<reconfigureIfAddr4>(channel, std::nullopt, std::nullopt);
                     return responseSuccess();
                 case IPSrc::Unspecified:
                     return responseInvalidFieldRequest();
