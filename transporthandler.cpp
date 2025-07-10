@@ -7,6 +7,7 @@
 
 #include <array>
 #include <fstream>
+#include <mutex>
 
 using phosphor::logging::commit;
 using phosphor::logging::elog;
@@ -67,6 +68,10 @@ const std::unordered_set<IP::AddressOrigin> originsV4 = {
 static constexpr uint8_t oemCmdStart = 192;
 static constexpr uint8_t InteloemCmdStart = 199;
 bool IsDHCP = false;
+
+static std::unordered_map<uint8_t, uint16_t> lastEnabledVlan;
+
+static std::mutex vlanMutex;
 
 // Checks if the ifname is part of the networkd path
 // This assumes the path came from the network subtree PATH_ROOT
@@ -685,6 +690,10 @@ void createVLAN(sdbusplus::bus::bus& bus, ChannelParams& params, uint16_t vlan)
         log<level::ERR>("error in createVLAN", entry("name=%s", e.name()),
                         entry("what=%s", e.what()));
         elog<InternalFailure>();
+    }
+    {  
+       std::lock_guard<std::mutex> lock(vlanMutex);
+       lastEnabledVlan[params.id]=vlan;
     }
 }
 
@@ -1719,7 +1728,10 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
 
             if (!vlanEnable)
             {
-                lastDisabledVlan[channel] = vlan;
+                {
+                  std::lock_guard<std::mutex> lock(vlanMutex);
+                  lastDisabledVlan[channel] = vlan;
+                }
                 channelCall<deleteVLAN>(channel, vlan);
                 return responseSuccess();
             }
@@ -2554,15 +2566,35 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         case LanParam::VLANId:
         {
             uint16_t vlan = channelCall<getVLANProperty>(channel);
-            if (vlan != 0)
             {
-                vlan |= VLAN_ENABLE_FLAG;
-            }
-            else
-            {
-                vlan = lastDisabledVlan[channel];
-            }
-            ret.pack(static_cast<uint8_t>(vlan & 0x00FF));
+             std::lock_guard<std::mutex> lock(vlanMutex);
+             if ( vlan==0 ) 
+             {
+                 vlan = lastDisabledVlan[channel];  
+                 lastDisabledVlan[channel] = 0;
+             }
+             else if ( auto it = lastDisabledVlan.find(channel); 
+               it != lastDisabledVlan.end() && it->second != 0 ) 
+             {
+                 vlan = it->second;
+                 it->second = 0;
+             }
+             else if (auto it = lastEnabledVlan.find(channel); 
+               it != lastEnabledVlan.end() && it->second != 0 )
+             {
+                  vlan = it->second;
+                  lastEnabledVlan.erase(it); 
+                  vlan |= VLAN_ENABLE_FLAG;
+             }
+             else
+             {
+                  vlan |= VLAN_ENABLE_FLAG;
+             }
+                   
+                 lastEnabledVlan.erase(channel);
+	    }
+
+	    ret.pack(static_cast<uint8_t>(vlan & 0x00FF));
             ret.pack(static_cast<uint8_t>((vlan & 0xFF00) >> 8));
             return responseSuccess(std::move(ret));
         }
