@@ -59,7 +59,8 @@ WatchdogService::Properties WatchdogService::getProperties()
     auto request = wd_service.newMethodCall(bus, prop_intf, "GetAll");
     request.append(wd_intf);
 
-    std::map<std::string, std::variant<bool, uint64_t, std::string>> properties;
+    std::map<std::string, std::variant<bool, uint8_t, uint64_t, std::string>>
+        properties;
     try
     {
         auto response = bus.call(request);
@@ -89,7 +90,8 @@ WatchdogService::Properties WatchdogService::getProperties()
             std::get<std::string>(properties.at("CurrentTimerUse")));
         wd_prop.expiredTimerUse = Watchdog::convertTimerUseFromString(
             std::get<std::string>(properties.at("ExpiredTimerUse")));
-
+        wd_prop.preTimeoutInterval =
+            std::get<uint8_t>(properties.at("PreTimeoutInterval"));
         wd_prop.interval = std::get<uint64_t>(properties.at("Interval"));
         wd_prop.timeRemaining =
             std::get<uint64_t>(properties.at("TimeRemaining"));
@@ -205,8 +207,13 @@ void WatchdogService::setInterval(uint64_t interval)
     setProperty("Interval", interval);
 }
 
+void WatchdogService::setPreTimeoutInterval(uint8_t preTimeoutInterval)
+{
+    setProperty("PreTimeoutInterval", preTimeoutInterval);
+}
+
 void WatchdogService::setPreTimeoutInterrupt(
-     PreTimeoutInterruptAction preTimeoutInterrupt)
- {
-     setProperty("PreTimeoutInterrupt", convertForMessage(preTimeoutInterrupt));
- }
+    PreTimeoutInterruptAction preTimeoutInterrupt)
+{
+    setProperty("PreTimeoutInterrupt", convertForMessage(preTimeoutInterrupt));
+}
