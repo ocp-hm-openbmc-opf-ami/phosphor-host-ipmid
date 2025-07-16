@@ -957,6 +957,8 @@ bool isBootBlock_isOperationalFw_Ok()
     {
         sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
         std::string version = "";
+        const std::string bmc_FW_ObjPath_prefix =
+            "/xyz/openbmc_project/software/bmc";
 
         auto method = bus.new_method_call(objMapperService, swUpdatebleObjPath,
                                           propIntf, "Get");
@@ -972,6 +974,11 @@ bool isBootBlock_isOperationalFw_Ok()
 
         for (const auto& fwVerObjPath : fwVerObjPaths)
         {
+            if (fwVerObjPath.find(bmc_FW_ObjPath_prefix) != 0)
+            {
+                continue;
+            }
+
             auto method = bus.new_method_call(
                 fwVerService, fwVerObjPath.c_str(), propIntf, "Get");
             method.append(fwVerIntf, "Version");

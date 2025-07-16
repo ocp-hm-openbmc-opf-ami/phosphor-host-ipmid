@@ -25,7 +25,7 @@ constexpr auto INTF_VLAN = "xyz.openbmc_project.Network.VLAN";
 constexpr auto INTF_VLAN_CREATE = "xyz.openbmc_project.Network.VLAN.Create";
 constexpr auto INTF_ARPCONTROL = "xyz.openbmc_project.Network.ARPControl";
 constexpr auto maxPriority = 7;
-constexpr auto CHANNEL_INTF_SERVICE="xyz.openbmc_project.Ipmi.Channel";
+constexpr auto CHANNEL_INTF_SERVICE = "xyz.openbmc_project.Ipmi.Channel";
 constexpr auto SESSION_ROOT_PATH = "/xyz/openbmc_project/ipmi/session";
 constexpr auto INTF_IPHEADER = "xyz.openbmc_project.Ipmi.IPHeader";
 constexpr auto INTF_NCSI = "xyz.openbmc_project.Network.NCSIConfiguration";
@@ -47,8 +47,12 @@ enum class LanParam : uint8_t
     GARPInterval = 11,
     Gateway1 = 12,
     Gateway1MAC = 13,
-    BackupGateway=14,
-    BackupGatewayMAC=15,
+    BackupGateway = 14,
+    BackupGatewayMAC = 15,
+    CommunityString = 16,
+    NumofDestination = 17,
+    DestinationType = 18,
+    DestinationAddress = 19,
     VLANId = 20,
     VLANPriority = 21,
     CiphersuiteSupport = 22,
@@ -74,13 +78,13 @@ enum class LanParam : uint8_t
     IPv6StaticRouter2MAC = 70,
     IPv6StaticRouter2PrefixLength = 71,
     IPv6StaticRouter2PrefixValue = 72,
-    IPv6DynamicRouterInfoSets=73,
-    IPv6DynamicRouterInfoIPAddress=74,
-    IPv6DynamicRouterInfoMACAddress=75,
-    IPv6DynamicRouterInfoPrefixLength=76,
-    IPv6DynamicRouterInfoPrefixValue=77,
-    IPv6SLAACTimingConfigurationSupport=79,
-    IPv6SLAACTimingConfiguration=80
+    IPv6DynamicRouterInfoSets = 73,
+    IPv6DynamicRouterInfoIPAddress = 74,
+    IPv6DynamicRouterInfoMACAddress = 75,
+    IPv6DynamicRouterInfoPrefixLength = 76,
+    IPv6DynamicRouterInfoPrefixValue = 77,
+    IPv6SLAACTimingConfigurationSupport = 79,
+    IPv6SLAACTimingConfiguration = 80
 };
 
 /** @brief IPMI LAN AMI OEM Parameters */
@@ -159,17 +163,18 @@ enum class IPv6AddressStatus : uint8_t
 
 namespace IPv6RouterControlFlag
 {
-constexpr uint8_t Static = 0;     //IPv6 Router Address Configuration Control Bits
-constexpr uint8_t Dynamic = 1;   //IPv6 Router Address Configuration Control Bits
+constexpr uint8_t Static = 0;  // IPv6 Router Address Configuration Control Bits
+constexpr uint8_t Dynamic = 1; // IPv6 Router Address Configuration Control Bits
 uint8_t StaticControl = 0;
-constexpr uint8_t Gateway6Idx=0;
-constexpr uint8_t PrefixIdx=1;
-constexpr uint8_t PrefixLenIdx=2;
-constexpr uint8_t Gateway6MACIdx=3;
+constexpr uint8_t Gateway6Idx = 0;
+constexpr uint8_t PrefixIdx = 1;
+constexpr uint8_t PrefixLenIdx = 2;
+constexpr uint8_t Gateway6MACIdx = 3;
 constexpr uint8_t IPV6STRLEN = 16;
 constexpr uint8_t MACSTRLEN = 6;
 constexpr uint8_t MAX_IPV6_DYNAMIC_ROUTER_INFO_SETS = 4;
-using RACFG_T = std::tuple<std::vector<uint8_t>, std::vector<uint8_t>, uint8_t, std::vector<uint8_t>>;
+using RACFG_T = std::tuple<std::vector<uint8_t>, std::vector<uint8_t>, uint8_t,
+                           std::vector<uint8_t>>;
 }; // namespace IPv6RouterControlFlag
 
 // LAN Handler specific response codes
@@ -244,37 +249,37 @@ enum class DHCPv6TimingParamIndex : uint8_t
 
 namespace DHCPv6TimingParamMaxLimit
 {
-    constexpr uint8_t SOL_MAX_DELAY = 254;
-    constexpr uint8_t SOL_TIMEOUT = 254;
-    constexpr uint8_t REQ_TIMEOUT = 254;
-    constexpr uint8_t REQ_MAX_RC = 101;
-    constexpr uint8_t INF_TIMEOUT = 254;
+constexpr uint8_t SOL_MAX_DELAY = 254;
+constexpr uint8_t SOL_TIMEOUT = 254;
+constexpr uint8_t REQ_TIMEOUT = 254;
+constexpr uint8_t REQ_MAX_RC = 101;
+constexpr uint8_t INF_TIMEOUT = 254;
 }; // namespace DHCPv6TimingParamMaxLimit
 
 namespace SLAACTimingParamIndex
 {
-    constexpr int MaxRtrSolicitationDelay = 0;
-    constexpr int RtrSolicitationInterval = 1;
-    constexpr int MaxRtrSolicitations = 2;
-    constexpr int DupAddrDetectTransmits = 3;
-    constexpr int MaxMulticastSolicit = 4;
-    constexpr int MaxUnicastSolicit = 5;
-    constexpr int MaxAnycastDelayTime = 6;
-    constexpr int MaxNeighborAdvertisement = 7;
-    constexpr int ReachableTime = 8;
-    constexpr int RetransTimer = 9;
-    constexpr int DelayFirstProbeTime = 10;
-    constexpr int MaxRandomFactor = 11;
-    constexpr int MinRandomFactor = 12;
-};
+constexpr int MaxRtrSolicitationDelay = 0;
+constexpr int RtrSolicitationInterval = 1;
+constexpr int MaxRtrSolicitations = 2;
+constexpr int DupAddrDetectTransmits = 3;
+constexpr int MaxMulticastSolicit = 4;
+constexpr int MaxUnicastSolicit = 5;
+constexpr int MaxAnycastDelayTime = 6;
+constexpr int MaxNeighborAdvertisement = 7;
+constexpr int ReachableTime = 8;
+constexpr int RetransTimer = 9;
+constexpr int DelayFirstProbeTime = 10;
+constexpr int MaxRandomFactor = 11;
+constexpr int MinRandomFactor = 12;
+}; // namespace SLAACTimingParamIndex
 
 namespace SLAACTimingParamMaxLimit
 {
-    constexpr uint8_t MaxRtrSolicitations = 100;
-    constexpr uint8_t DupAddrDetectTransmits = 101;
-    constexpr uint8_t MaxMulticastSolicit = 100;
-    constexpr uint8_t MaxUnicastSolicit = 100;
-}; // namespace DHCPv6TimingParamDefault
+constexpr uint8_t MaxRtrSolicitations = 100;
+constexpr uint8_t DupAddrDetectTransmits = 101;
+constexpr uint8_t MaxMulticastSolicit = 100;
+constexpr uint8_t MaxUnicastSolicit = 100;
+}; // namespace SLAACTimingParamMaxLimit
 
 } // namespace transport
 } // namespace ipmi

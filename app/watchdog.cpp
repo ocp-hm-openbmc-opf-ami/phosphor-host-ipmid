@@ -127,43 +127,43 @@ WatchdogService::Action ipmiActionToWdAction(IpmiAction ipmi_action)
 }
 
 enum class IpmiPreTimeoutInterrupt : uint8_t
- {
-     None = 0x0,
-     SMI = 0x1,
-     NMI = 0x2,
-     MI = 0x3,
- };
- /** @brief Converts an IPMI Watchdog PreTimeoutInterrupt to DBUS defined action
-  *  @param[in] ipmi_action The IPMI Watchdog PreTimeoutInterrupt
-  *  @return The Watchdog PreTimeoutInterrupt that the ipmi_action maps to
-  */
- WatchdogService::PreTimeoutInterruptAction ipmiPreTimeoutInterruptToWdAction(
-     IpmiPreTimeoutInterrupt ipmiPreTimeOutInterrupt)
- {
-     switch (ipmiPreTimeOutInterrupt)
-     {
-         case IpmiPreTimeoutInterrupt::None:
-         {
-             return WatchdogService::PreTimeoutInterruptAction::None;
-         }
-         case IpmiPreTimeoutInterrupt::SMI:
-         {
-             return WatchdogService::PreTimeoutInterruptAction::SMI;
-         }
-         case IpmiPreTimeoutInterrupt::NMI:
-         {
-             return WatchdogService::PreTimeoutInterruptAction::NMI;
-         }
-         case IpmiPreTimeoutInterrupt::MI:
-         {
-             return WatchdogService::PreTimeoutInterruptAction::MI;
-         }
-         default:
-         {
-             throw std::domain_error("IPMI PreTimeoutInterrupt is invalid");
-         }
-     }
- }
+{
+    None = 0x0,
+    SMI = 0x1,
+    NMI = 0x2,
+    MI = 0x3,
+};
+/** @brief Converts an IPMI Watchdog PreTimeoutInterrupt to DBUS defined action
+ *  @param[in] ipmi_action The IPMI Watchdog PreTimeoutInterrupt
+ *  @return The Watchdog PreTimeoutInterrupt that the ipmi_action maps to
+ */
+WatchdogService::PreTimeoutInterruptAction ipmiPreTimeoutInterruptToWdAction(
+    IpmiPreTimeoutInterrupt ipmiPreTimeOutInterrupt)
+{
+    switch (ipmiPreTimeOutInterrupt)
+    {
+        case IpmiPreTimeoutInterrupt::None:
+        {
+            return WatchdogService::PreTimeoutInterruptAction::None;
+        }
+        case IpmiPreTimeoutInterrupt::SMI:
+        {
+            return WatchdogService::PreTimeoutInterruptAction::SMI;
+        }
+        case IpmiPreTimeoutInterrupt::NMI:
+        {
+            return WatchdogService::PreTimeoutInterruptAction::NMI;
+        }
+        case IpmiPreTimeoutInterrupt::MI:
+        {
+            return WatchdogService::PreTimeoutInterruptAction::MI;
+        }
+        default:
+        {
+            throw std::domain_error("IPMI PreTimeoutInterrupt is invalid");
+        }
+    }
+}
 
 enum class IpmiTimerUse : uint8_t
 {
@@ -280,6 +280,7 @@ ipmi::RspType<> ipmiSetWatchdogTimer(
         wd_service.setTimerUse(ipmiTimerUseToWdTimerUse(ipmiTimerUse));
 
         wd_service.setExpiredTimerUse(WatchdogService::TimerUse::Reserved);
+        wd_service.setPreTimeoutInterval(preTimeoutInterval);
 
         timerUseExpirationFlags &= ~expFlagValue;
 
@@ -293,11 +294,12 @@ ipmi::RspType<> ipmiSetWatchdogTimer(
         wd_service.setLogTimeout(!dontLog);
 
         // pretimeOutAction
-         const auto ipmiPreTimeoutInterrupt =
-             static_cast<IpmiPreTimeoutInterrupt>(wdPreTimeoutInterruptMask &
-                 (static_cast<uint8_t>(preTimeoutInterrupt)));
-         wd_service.setPreTimeoutInterrupt(
-             ipmiPreTimeoutInterruptToWdAction(ipmiPreTimeoutInterrupt));
+        const auto ipmiPreTimeoutInterrupt =
+            static_cast<IpmiPreTimeoutInterrupt>(
+                wdPreTimeoutInterruptMask &
+                (static_cast<uint8_t>(preTimeoutInterrupt)));
+        wd_service.setPreTimeoutInterrupt(
+            ipmiPreTimeoutInterruptToWdAction(ipmiPreTimeoutInterrupt));
 
         lastCallSuccessful = true;
         return ipmi::responseSuccess();
@@ -456,8 +458,7 @@ ipmi::RspType<uint3_t,        // timerUse - timer use
             }
         }
 
-        // TODO: Do something about having pretimeout support
-        pretimeout = 0;
+        pretimeout = wd_prop.preTimeoutInterval;
 
         lastCallSuccessful = true;
         return ipmi::responseSuccess(
