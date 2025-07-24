@@ -33,7 +33,6 @@ using sdbusplus::server::xyz::openbmc_project::network::ARPControl;
 using sdbusplus::server::xyz::openbmc_project::network::EthernetInterface;
 using sdbusplus::server::xyz::openbmc_project::network::IP;
 using sdbusplus::server::xyz::openbmc_project::network::Neighbor;
-
 using Json = nlohmann::json;
 using Variant = std::variant<bool, uint8_t, int16_t, uint16_t, int32_t,
                              uint32_t, int64_t, uint64_t, std::string>;
@@ -1212,6 +1211,7 @@ RspType<> setLanOem(uint8_t channel, uint8_t parameter, message::Payload& req)
 RspType<message::Payload> getLanOem(uint8_t channel, uint8_t parameter,
                                     uint8_t set, uint8_t block)
     __attribute__((weak));
+
 RspType<> setAMILanOem(uint8_t channel, uint8_t parameter,
                        message::Payload& req);
 RspType<message::Payload> getAMILanOem(uint8_t channel, uint8_t parameter,

@@ -96,23 +96,23 @@ nlohmann::json parseJSONConfig(const std::string& configFile)
 }
 
 void restartSystemdUnit(const std::string& unit)
- {
-     sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
- 
-     try
-     {
-         auto method = bus.new_method_call(systemBusName, systemPath,
-                                           systemIntf, "RestartUnit");
-         method.append(unit.c_str(), "replace");
-         bus.call_noreply(method);
-     }
-     catch (const sdbusplus::exception::SdBusError& ex)
-     {
-         log<level::ERR>("Failed to restart nslcd service",
-                         entry("ERR=%s", ex.what()));
-         elog<InternalFailure>();
-     }
- }
+{
+    sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+
+    try
+    {
+        auto method = bus.new_method_call(systemBusName, systemPath, systemIntf,
+                                          "RestartUnit");
+        method.append(unit.c_str(), "replace");
+        bus.call_noreply(method);
+    }
+    catch (const sdbusplus::exception::SdBusError& ex)
+    {
+        log<level::ERR>("Failed to restart nslcd service",
+                        entry("ERR=%s", ex.what()));
+        elog<InternalFailure>();
+    }
+}
 
 bool isDCMIPowerMgmtSupported()
 {
@@ -286,8 +286,8 @@ std::optional<std::string> getHostName(ipmi::Context::ptr& ctx)
     return hostname;
 }
 
-std::optional<EthernetInterface::DHCPConf>
-    getDHCPEnabled(ipmi::Context::ptr& ctx)
+std::optional<EthernetInterface::DHCPConf> getDHCPEnabled(
+    ipmi::Context::ptr& ctx)
 {
     auto ethdevice = ipmi::getChannelName(ethernetDefaultChannelNum);
     ipmi::DbusObjectInfo ethernetObj{};
@@ -469,9 +469,9 @@ bool setVendorOption(ipmi::Context::ptr& ctx, uint32_t option,
         {
             try
             {
-                auto method = bus.new_method_call(service.c_str(), path.c_str(),
-                                                  dhcpIntf,
-                                                  dcmi::dhcpOption43Enabled);
+                auto method =
+                    bus.new_method_call(service.c_str(), path.c_str(), dhcpIntf,
+                                        dcmi::dhcpOption43Enabled);
                 method.append(option, value);
                 bus.call_noreply(method);
             }
@@ -758,9 +758,9 @@ ipmi::RspType<uint8_t,          // length
     return ipmi::responseSuccess(nameSize, data);
 }
 
-ipmi::RspType<uint8_t>
-    setMgmntCtrlIdStr(ipmi::Context::ptr& ctx, uint8_t offset, uint8_t count,
-                      std::vector<char> data)
+ipmi::RspType<uint8_t> setMgmntCtrlIdStr(ipmi::Context::ptr& ctx,
+                                         uint8_t offset, uint8_t count,
+                                         std::vector<char> data)
 {
     if ((offset > dcmi::maxCtrlIdStrLen) || (count > dcmi::maxBytes) ||
         ((offset + count) > dcmi::maxCtrlIdStrLen))
@@ -921,9 +921,9 @@ namespace dcmi
 namespace temp_readings
 {
 
-std::tuple<bool, bool, uint8_t>
-    readTemp(ipmi::Context::ptr& ctx, const std::string& dbusService,
-             const std::string& dbusPath)
+std::tuple<bool, bool, uint8_t> readTemp(ipmi::Context::ptr& ctx,
+                                         const std::string& dbusService,
+                                         const std::string& dbusPath)
 {
     // Read the temperature value from d-bus object. Need some conversion.
     // As per the interface xyz.openbmc_project.Sensor.Value, the
@@ -962,9 +962,9 @@ std::tuple<bool, bool, uint8_t>
                            static_cast<uint8_t>(tempDegrees));
 }
 
-std::tuple<std::vector<std::tuple<uint7_t, bool, uint8_t>>, uint8_t>
-    read(ipmi::Context::ptr& ctx, const std::string& type, uint8_t instance,
-         size_t count)
+std::tuple<std::vector<std::tuple<uint7_t, bool, uint8_t>>, uint8_t> read(
+    ipmi::Context::ptr& ctx, const std::string& type, uint8_t instance,
+    size_t count)
 {
     std::vector<std::tuple<uint7_t, bool, uint8_t>> response{};
 
@@ -1081,7 +1081,8 @@ ipmi::RspType<> setDCMIConfParams(ipmi::Context::ptr& ctx, uint8_t parameter,
             {
                 return ipmi::responseUnspecifiedError();
             }
-            if (activate && (dhcpEnabled.value() == EthernetInterface::DHCPConf::v6stateless))
+            if (activate && (dhcpEnabled.value() ==
+                             EthernetInterface::DHCPConf::v6stateless))
             {
                 return ipmi::responseCommandNotAvailable();
             }
@@ -1339,13 +1340,12 @@ ipmi::RspType<uint16_t, // current power
                                  reserved2);
 }
 
-ipmi::RspType<uint8_t, uint8_t, uint16_t>
-    getThermalLimit(uint8_t getThermalEntityID,
-                    uint8_t GetThermalEntityInstance)
+ipmi::RspType<uint8_t, uint8_t, uint16_t> getThermalLimit(
+    uint8_t getThermalEntityID, uint8_t GetThermalEntityInstance)
 
 {
     uint8_t getTempLimit;
-    uint8_t getExceptime;
+    uint16_t getExceptime;
     uint8_t getExceptAct = 0;
     std::map<uint8_t, std::string>::const_iterator it;
 
@@ -1413,10 +1413,9 @@ ipmi::RspType<uint8_t, uint8_t, uint16_t>
     return ipmi::responseSuccess(getExceptAct, getTempLimit, getExceptime);
 }
 
-ipmi::RspType<> setThermalLimit(uint8_t thermalEntityID,
-                                uint8_t thermalEntityInstance,
-                                uint8_t thermalExceptionAction,
-                                uint8_t tempLimit, uint16_t exceptionTime)
+ipmi::RspType<> setThermalLimit(
+    uint8_t thermalEntityID, uint8_t thermalEntityInstance,
+    uint8_t thermalExceptionAction, uint8_t tempLimit, uint16_t exceptionTime)
 {
     if ((thermalEntityID != inletTemp1) && (thermalEntityID != inletTemp2))
     {
@@ -1489,9 +1488,9 @@ namespace dcmi
 namespace sensor_info
 {
 
-std::tuple<std::vector<uint16_t>, uint8_t>
-    read(const std::string& type, uint8_t instance,
-         const nlohmann::json& config, uint8_t count)
+std::tuple<std::vector<uint16_t>, uint8_t> read(
+    const std::string& type, uint8_t instance, const nlohmann::json& config,
+    uint8_t count)
 {
     std::vector<uint16_t> responses{};
 
