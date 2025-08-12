@@ -1926,7 +1926,7 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
     if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
         BootOptionParameter::bootServicePartitionSelect)
     {
-        uint8_t servicePartition;
+        uint8_t servicePartition = 0;
         std::string service;
         boost::system::error_code ec = getService(
             ctx, "xyz.openbmc_project.Control.Boot.ServicePartitionSelect",
@@ -1951,8 +1951,8 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
     if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
         BootOptionParameter::bootServicePartitionScan)
     {
-        bool requestScan;
-        bool partitionDiscovered;
+        bool requestScan = false;
+        bool partitionDiscovered = false;
         std::string service;
         boost::system::error_code ec = getService(
             ctx, "xyz.openbmc_project.Control.Boot.ServicePartitionScan",
@@ -1982,16 +1982,16 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
             }
         }
         response.pack(bootOptionParameter, uint1_t{}, partitionDiscovered,
-		      requestScan);
+                      requestScan);
         return ipmi::responseSuccess(std::move(response));
     }
 
     if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
         BootOptionParameter::bootInitiatorInfo)
     {
-        uint8_t channel;
-        uint32_t sessionID;
-        uint32_t timestamp;
+        uint8_t channel = 0;
+        uint32_t sessionID = 0;
+        uint32_t timestamp = 0;
         std::string service;
         boost::system::error_code ec = getService(
             ctx, "xyz.openbmc_project.Control.Boot.BootInitiatorInfo",
@@ -2039,9 +2039,9 @@ ipmi::RspType<ipmi::message::Payload> ipmiChassisGetSysBootOptions(
     if (types::enum_cast<BootOptionParameter>(bootOptionParameter) ==
         BootOptionParameter::bootInitiatorMailbox)
     {
-        uint8_t block;
-        uint64_t lower;
-        uint64_t upper;
+        uint8_t block = 0;
+        uint64_t lower = 0;
+        uint64_t upper = 0;
         std::string service;
         boost::system::error_code ec =
             getService(ctx, "xyz.openbmc_project.Control.Boot.BootMailbox",
@@ -2716,9 +2716,9 @@ ipmi::RspType<> ipmiChassisSetSysBootOptions(
                     }
                 }
             }
-	    if (((modeIpmiToDbus.end() == modeItr) &&
-		 (sourceIpmiToDbus.end() == sourceItr)) ||
-		 (typeIpmiToDbus.end() == typeItr))
+            if (((modeIpmiToDbus.end() == modeItr) &&
+                 (sourceIpmiToDbus.end() == sourceItr)) ||
+                (typeIpmiToDbus.end() == typeItr))
             {
                 // return error if boot option is not supported
                 lg2::error(
