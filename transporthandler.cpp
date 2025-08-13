@@ -55,6 +55,8 @@ constexpr const char* destAddrIpv6Prop = "DestinationAddrIPv6";
 constexpr const char* configFilePath =
     "/var/lib/pef-alert-manager/pef-lan-param-config.json";
 
+constexpr bool debug = false;
+
 void updateJsonFile(const std::string& configFilePath,
                     const std::string& communityString)
 {
@@ -3070,7 +3072,10 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
     message::Payload ret;
     constexpr uint8_t current_revision = 0x11;
     ret.pack(current_revision);
-    log<level::ERR>("Get Lan - Invalid field in request");
+    if constexpr (debug)
+    {
+        log<level::ERR>("Get Lan - Invalid field in request");
+    }
 
     if (revOnly)
     {
@@ -3081,7 +3086,10 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         static_cast<uint8_t>(channelBits), ctx->channel);
     if (reserved || !isValidChannel(channel))
     {
-        lg2::error("Get Lan - Invalid field in request");
+        if constexpr (debug)
+        {
+            lg2::error("Get Lan - Invalid field in request");
+        }
         return responseInvalidFieldRequest();
     }
 

@@ -94,6 +94,8 @@ static uint32_t sdrLastAdd = noTimestamp;
 static uint32_t sdrLastRemove = noTimestamp;
 static constexpr size_t lastRecordIndex = 0xFFFF;
 
+constexpr bool debug = false;
+
 // The IPMI spec defines four Logical Units (LUN), each capable of supporting
 // 255 sensors. The 256 values assigned to LUN 2 are special and are not used
 // for general purpose sensors. Each LUN reserves location 0xFF. The maximum
@@ -219,14 +221,20 @@ static sdbusplus::bus::match_t thresholdChanged(
             auto ptr = std::get_if<bool>(&(findAssert->second));
             if (ptr == nullptr)
             {
-                lg2::error("thresholdChanged: Assert non bool");
+                if constexpr (debug)
+                {
+                    lg2::error("thresholdChanged: Assert non bool");
+                }
                 return;
             }
             if (*ptr)
             {
-                lg2::info(
-                    "thresholdChanged: Assert, sensor path: {SENSOR_PATH}",
-                    "SENSOR_PATH", m.get_path());
+                if constexpr (debug)
+                {
+                    lg2::info(
+                        "thresholdChanged: Assert, sensor path: {SENSOR_PATH}",
+                        "SENSOR_PATH", m.get_path());
+                }
                 thresholdDeassertMap[m.get_path()][findAssert->first] = *ptr;
             }
             else
@@ -235,9 +243,12 @@ static sdbusplus::bus::match_t thresholdChanged(
                     thresholdDeassertMap[m.get_path()][findAssert->first];
                 if (value)
                 {
-                    lg2::info(
-                        "thresholdChanged: deassert, sensor path: {SENSOR_PATH}",
-                        "SENSOR_PATH", m.get_path());
+                    if constexpr (debug)
+                    {
+                        lg2::info(
+                            "thresholdChanged: deassert, sensor path: {SENSOR_PATH}",
+                            "SENSOR_PATH", m.get_path());
+                    }
                     value = *ptr;
                 }
             }
@@ -411,8 +422,8 @@ static bool getSensorMap(ipmi::Context::ptr ctx, std::string sensorConnection,
 namespace sensor
 {
 // Read VR profiles from sensor(daemon) interface
-static std::optional<std::vector<std::string>>
-    getSupportedVrProfiles(const ipmi::DbusInterfaceMap::mapped_type& object)
+static std::optional<std::vector<std::string>> getSupportedVrProfiles(
+    const ipmi::DbusInterfaceMap::mapped_type& object)
 {
     // get VR mode profiles from Supported Interface
     auto supportedProperty = object.find("Supported");
@@ -472,9 +483,9 @@ static std::optional<std::string> calculateVRMode(
 }
 
 // Calculate sensor value from IPMI reading byte
-static std::optional<double>
-    calculateValue(uint8_t reading, const ipmi::DbusInterfaceMap& sensorMap,
-                   const ipmi::DbusInterfaceMap::mapped_type& valueObject)
+static std::optional<double> calculateValue(
+    uint8_t reading, const ipmi::DbusInterfaceMap& sensorMap,
+    const ipmi::DbusInterfaceMap::mapped_type& valueObject)
 {
     if (valueObject.find("Value") == valueObject.end())
     {
@@ -726,8 +737,11 @@ ipmi::RspType<> ipmiSenPlatformEvent(ipmi::Context::ptr ctx,
 
     if (ipmi::getChannelInfo(ctx->channel, chInfo) != ipmi::ccSuccess)
     {
-        lg2::error("Failed to get Channel Info, channel: {CHANNEL}", "CHANNEL",
-                   ctx->channel);
+        if constexpr (debug)
+        {
+            lg2::error("Failed to get Channel Info, channel: {CHANNEL}",
+                       "CHANNEL", ctx->channel);
+        }
         return ipmi::responseUnspecifiedError();
     }
 
@@ -1804,9 +1818,12 @@ bool constructSensorSdr(
     DbusInterfaceMap sensorMap;
     if (!getSensorMap(ctx, service, path, sensorMap, sensorMapSdrUpdatePeriod))
     {
-        lg2::error("Failed to update sensor map for threshold sensor, "
-                   "service: {SERVICE}, path: {PATH}",
-                   "SERVICE", service, "PATH", path);
+        if constexpr (debug)
+        {
+            lg2::error("Failed to update sensor map for threshold sensor, "
+                       "service: {SERVICE}, path: {PATH}",
+                       "SERVICE", service, "PATH", path);
+        }
         return false;
     }
 
@@ -2177,7 +2194,10 @@ static int getSensorDataRecord(
                             connection, path, &interfaces);
     if (status)
     {
-        lg2::error("getSensorDataRecord: getSensorConnection error");
+        if constexpr (debug)
+        {
+            lg2::error("getSensorDataRecord: getSensorConnection error");
+        }
         return GENERAL_ERROR;
     }
     uint16_t sensorNum = getSensorNumberFromPath(path);
@@ -2186,7 +2206,10 @@ static int getSensorDataRecord(
     if (((sensorNum > lun1MaxSensorNum) && (sensorNum <= maxIPMISensors)) ||
         (sensorNum > lun3MaxSensorNum))
     {
-        lg2::error("getSensorDataRecord: invalidSensorNumber");
+        if constexpr (debug)
+        {
+            lg2::error("getSensorDataRecord: invalidSensorNumber");
+        }
         return GENERAL_ERROR;
     }
     uint8_t sensornumber = static_cast<uint8_t>(sensorNum);
@@ -2195,7 +2218,10 @@ static int getSensorDataRecord(
     if ((sensornumber != static_cast<uint8_t>(sensNumFromRecID)) &&
         (lun != ctx->lun))
     {
-        lg2::error("getSensorDataRecord: sensor record mismatch");
+        if constexpr (debug)
+        {
+            lg2::error("getSensorDataRecord: sensor record mismatch");
+        }
         return GENERAL_ERROR;
     }
 
@@ -2442,14 +2468,20 @@ ipmi::RspType<uint16_t,            // next record ID
     // record
     if ((sdrReservationID == 0 || reservationID != sdrReservationID) && offset)
     {
-        lg2::error("ipmiStorageGetSDR: responseInvalidReservationId");
+        if constexpr (debug)
+        {
+            lg2::error("ipmiStorageGetSDR: responseInvalidReservationId");
+        }
         return ipmi::responseInvalidReservationId();
     }
 
     auto& sensorTree = getSensorTree();
     if (!getSensorSubtree(sensorTree) && sensorTree.empty())
     {
-        lg2::error("ipmiStorageGetSDR: getSensorSubtree error");
+        if constexpr (debug)
+        {
+            lg2::error("ipmiStorageGetSDR: getSensorSubtree error");
+        }
         return ipmi::responseResponseError();
     }
 
@@ -2462,14 +2494,20 @@ ipmi::RspType<uint16_t,            // next record ID
 
     if (nextRecordId < 0)
     {
-        lg2::error("ipmiStorageGetSDR: fail to get SDR");
+        if constexpr (debug)
+        {
+            lg2::error("ipmiStorageGetSDR: fail to get SDR");
+        }
         return ipmi::responseInvalidFieldRequest();
     }
     get_sdr::SensorDataRecordHeader* hdr =
         reinterpret_cast<get_sdr::SensorDataRecordHeader*>(record.data());
     if (!hdr)
     {
-        lg2::error("ipmiStorageGetSDR: record header is null");
+        if constexpr (debug)
+        {
+            lg2::error("ipmiStorageGetSDR: record header is null");
+        }
         return ipmi::responseSuccess(nextRecordId, record);
     }
 
@@ -2477,7 +2515,10 @@ ipmi::RspType<uint16_t,            // next record ID
         sizeof(get_sdr::SensorDataRecordHeader) + hdr->record_length;
     if (offset >= sdrLength)
     {
-        lg2::error("ipmiStorageGetSDR: offset is outside the record");
+        if constexpr (debug)
+        {
+            lg2::error("ipmiStorageGetSDR: offset is outside the record");
+        }
         return ipmi::responseParmOutOfRange();
     }
     if (sdrLength < (offset + bytesToRead))
@@ -2488,7 +2529,10 @@ ipmi::RspType<uint16_t,            // next record ID
     uint8_t* respStart = reinterpret_cast<uint8_t*>(hdr) + offset;
     if (!respStart)
     {
-        lg2::error("ipmiStorageGetSDR: record is null");
+        if constexpr (debug)
+        {
+            lg2::error("ipmiStorageGetSDR: record is null");
+        }
         return ipmi::responseSuccess(nextRecordId, record);
     }
 
@@ -2544,9 +2588,12 @@ std::tuple<uint8_t,                // Total of instance sensors
         if (!getSensorMap(ctx, connection, sensorObjPath, sensorMap,
                           sensorMapSdrUpdatePeriod))
         {
-            lg2::error("Failed to update sensor map for threshold sensor, "
-                       "service: {SERVICE}, path: {PATH}",
-                       "SERVICE", connection, "PATH", sensorObjPath);
+            if constexpr (debug)
+            {
+                lg2::error("Failed to update sensor map for threshold sensor, "
+                           "service: {SERVICE}, path: {PATH}",
+                           "SERVICE", connection, "PATH", sensorObjPath);
+            }
             continue;
         }
 

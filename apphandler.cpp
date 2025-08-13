@@ -93,6 +93,8 @@ constexpr auto fwVerIntf = "xyz.openbmc_project.Software.Version";
 
 constexpr auto propIntf = "org.freedesktop.DBus.Properties";
 
+constexpr bool debug = false;
+
 // Bitfield definitions for DATA_CORRUPT (0x57)
 enum SelfTestErrorBitfield : uint8_t
 {
@@ -401,7 +403,10 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
         // valid input
         if (s == static_cast<uint8_t>(acpi_state::PowerState::noChange))
         {
-            lg2::debug("No change for system power state");
+            if constexpr (debug)
+            {
+                lg2::debug("No change for system power state");
+            }
         }
         else
         {
@@ -432,7 +437,10 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
     }
     else
     {
-        lg2::debug("Do not change system power state");
+        if constexpr (debug)
+        {
+            lg2::debug("Do not change system power state");
+        }
     }
 
     if (devAcpiState & acpi_state::stateChanged)
@@ -449,7 +457,10 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
         // valid input
         if (s == static_cast<uint8_t>(acpi_state::PowerState::noChange))
         {
-            lg2::debug("No change for device power state");
+            if constexpr (debug)
+            {
+                lg2::debug("No change for device power state");
+            }
         }
         else
         {
@@ -480,7 +491,10 @@ ipmi::RspType<> ipmiSetAcpiPowerState(uint8_t sysAcpiState,
     }
     else
     {
-        lg2::debug("Do not change device power state");
+        if constexpr (debug)
+        {
+            lg2::debug("Do not change device power state");
+        }
     }
     return ipmi::responseSuccess();
 }
@@ -1645,7 +1659,10 @@ std::vector<uint8_t> readPrimaryOperatingSystems(const std::string& configFile)
 
     if (!jsonFile.good())
     {
-        std::cerr << "JSON file not found: " << configFile << std::endl;
+        if constexpr (debug)
+        {
+            std::cerr << "JSON file not found: " << configFile << std::endl;
+        }
         return {}; // Return an empty vector
     }
 
@@ -1656,7 +1673,10 @@ std::vector<uint8_t> readPrimaryOperatingSystems(const std::string& configFile)
     }
     catch (const Json::parse_error& e)
     {
-        std::cerr << "Error parsing JSON file: " << e.what() << std::endl;
+        if constexpr (debug)
+        {
+            std::cerr << "Error parsing JSON file: " << e.what() << std::endl;
+        }
         return {}; // Return an empty vector
     }
 
@@ -1671,8 +1691,12 @@ std::vector<uint8_t> readPrimaryOperatingSystems(const std::string& configFile)
     }
     else
     {
-        std::cerr << "primary_operating_system key not found or is not an array"
-                  << std::endl;
+        if constexpr (debug)
+        {
+            std::cerr
+                << "primary_operating_system key not found or is not an array"
+                << std::endl;
+        }
     }
 
     return primaryOperatingSystems;
@@ -1785,10 +1809,13 @@ ipmi::RspType<uint8_t,                // Parameter revision
         std::copy_n(paramString.begin() + offset, count,
                     configData.begin()); // 16 bytes chunk
     }
-    phosphor::logging::log<phosphor::logging::level::INFO>(
-        "The String Data: ",
-        phosphor::logging::entry("The Parameter String: %s",
-                                 paramString.c_str()));
+    if constexpr (debug)
+    {
+        phosphor::logging::log<phosphor::logging::level::INFO>(
+            "The String Data: ",
+            phosphor::logging::entry("The Parameter String: %s",
+                                     paramString.c_str()));
+    }
     return ipmi::responseSuccess(paramRevision, setSelector, configData);
 }
 
@@ -2083,7 +2110,10 @@ static bool isCmdAllowlisted(uint8_t busId, uint8_t targetAddr,
 #else
 static bool populateI2CControllerWRAllowlist()
 {
-    lg2::info("I2C_WHITELIST_CHECK is disabled, do not populate allowlist");
+    if constexpr (debug)
+    {
+        lg2::info("I2C_WHITELIST_CHECK is disabled, do not populate allowlist");
+    }
     return true;
 }
 #endif // ENABLE_I2C_WHITELIST_CHECK
