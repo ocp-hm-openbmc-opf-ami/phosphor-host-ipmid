@@ -99,9 +99,9 @@ static constexpr const char* allGrpProperty = "AllGroups";
 static constexpr const char* userPrivProperty = "UserPrivilege";
 static constexpr const char* userGrpProperty = "UserGroups";
 static constexpr const char* userEnabledProperty = "UserEnabled";
-//OEM Privilege
+// OEM Privilege
 static constexpr const char* mediaGroup = "media";
-//SNMP Trap V3
+// SNMP Trap V3
 static constexpr const char* snmpGroup = "snmp";
 
 static std::array<std::string, (PRIVILEGE_OEM + 1)> ipmiPrivIndex = {
@@ -274,15 +274,11 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
             }
             case UserUpdateEvent::userRenamed:
             {
-                std::fill(
-                    static_cast<uint8_t*>(userData->user[usrIndex].userName),
-                    static_cast<uint8_t*>(userData->user[usrIndex].userName) +
-                        sizeof(userData->user[usrIndex].userName),
-                    0);
-                std::strncpy(
+                std::memset(userData->user[usrIndex].userName, 0,
+                            ipmiMaxUserName);
+                std::memcpy(
                     reinterpret_cast<char*>(userData->user[usrIndex].userName),
                     newUserName.c_str(), ipmiMaxUserName);
-                userData->user[usrIndex].userName[ipmiMaxUserName - 1] = '\0';
                 ipmiRenameUserEntryPassword(userName, newUserName);
                 break;
             }
@@ -446,17 +442,17 @@ UserAccess::~UserAccess()
 {
     try
     {
-      if (signalHndlrObject)
-      {
-          userUpdatedSignal.reset();
-          userMgrRenamedSignal.reset();
-          userPropertiesSignal.reset();
-          sigHndlrLock.unlock();
-      }
+        if (signalHndlrObject)
+        {
+            userUpdatedSignal.reset();
+            userMgrRenamedSignal.reset();
+            userPropertiesSignal.reset();
+            sigHndlrLock.unlock();
+        }
     }
     catch (const boost::interprocess::interprocess_exception& e)
     {
-      std::cerr << "Interprocess exception caught: " << e.what() << std::endl;
+        std::cerr << "Interprocess exception caught: " << e.what() << std::endl;
     }
 }
 
@@ -472,13 +468,14 @@ UserAccess::UserAccess() : bus(ipmid_get_sd_bus_connection())
     }
     else
     {
-    mutexCleanUpFile.close();
-    mutexCleanupLock = boost::interprocess::file_lock(ipmiMutexCleanupLockFile);
-    if (mutexCleanupLock.try_lock())
-    {
-        boost::interprocess::named_recursive_mutex::remove(ipmiUserMutex);
-    }
-    mutexCleanupLock.lock_sharable();
+        mutexCleanUpFile.close();
+        mutexCleanupLock =
+            boost::interprocess::file_lock(ipmiMutexCleanupLockFile);
+        if (mutexCleanupLock.try_lock())
+        {
+            boost::interprocess::named_recursive_mutex::remove(ipmiUserMutex);
+        }
+        mutexCleanupLock.lock_sharable();
     }
     userMutex = std::make_unique<boost::interprocess::named_recursive_mutex>(
         boost::interprocess::open_or_create, ipmiUserMutex);
@@ -504,37 +501,36 @@ void UserAccess::setUserInfo(const uint8_t userId, UserInfo* userInfo)
 
 bool UserAccess::UserLockStatus(std::string& userName)
 {
-        const char* userNameStr = userName.c_str();
-        std::string objPath = "/xyz/openbmc_project/user/";
-        objPath += userNameStr;
-        const char* UserObjPath = objPath.c_str();
-        std::string lockedUserIface = "xyz.openbmc_project.User.Attributes";
-        std::string lockedUserProperty = "UserLockedForFailedAttempt";
-        std::variant<bool> lockedUserValue;
-        bool LockStatus;
-        static sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
+    const char* userNameStr = userName.c_str();
+    std::string objPath = "/xyz/openbmc_project/user/";
+    objPath += userNameStr;
+    const char* UserObjPath = objPath.c_str();
+    std::string lockedUserIface = "xyz.openbmc_project.User.Attributes";
+    std::string lockedUserProperty = "UserLockedForFailedAttempt";
+    std::variant<bool> lockedUserValue;
+    bool LockStatus;
+    static sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
 
-        try
-        {
-                auto method = bus.new_method_call(
-                                userMgrInterface, UserObjPath,
-                                dBusPropertiesInterface, "Get");
+    try
+    {
+        auto method = bus.new_method_call(userMgrInterface, UserObjPath,
+                                          dBusPropertiesInterface, "Get");
 
-                method.append(lockedUserIface, lockedUserProperty);
-                auto reply = bus.call(method);
-                reply.read(lockedUserValue);
-        }
-        catch (sdbusplus::exception_t&)
-        {
-                return false;
-        }
-
-        LockStatus = std::get<bool>(lockedUserValue);
-        if (LockStatus == true)
-        {
-                return true;
-        }
+        method.append(lockedUserIface, lockedUserProperty);
+        auto reply = bus.call(method);
+        reply.read(lockedUserValue);
+    }
+    catch (sdbusplus::exception_t&)
+    {
         return false;
+    }
+
+    LockStatus = std::get<bool>(lockedUserValue);
+    if (LockStatus == true)
+    {
+        return true;
+    }
+    return false;
 }
 
 bool UserAccess::isValidChannel(const uint8_t chNum)
@@ -612,7 +608,7 @@ bool UserAccess::isValidUserName(const std::string& userName)
         return false;
     }
     if (!std::regex_match(userName.c_str(),
-                          std::regex("[a-zA-Z_][a-zA-Z_0-9]*")))
+                          std::regex("^[a-zA-Z_][a-zA-Z0-9_.]{0,15}$")))
     {
         lg2::error("Unsupported characters in user name");
         return false;
@@ -621,18 +617,18 @@ bool UserAccess::isValidUserName(const std::string& userName)
     std::ifstream passwdFile("/etc/passwd");
     std::string line;
 
-    if (!passwdFile.is_open()) 
+    if (!passwdFile.is_open())
     {
-	    lg2::error("Unable to open /etc/passwd file");
-	    return false;
+        lg2::error("Unable to open /etc/passwd file");
+        return false;
     }
-    while (std::getline(passwdFile, line)) 
+    while (std::getline(passwdFile, line))
     {
-	    if (line.find(userName + ":") == 0) 
-	    {
-		    lg2::error("Username Already Exists !!");
-		    return false;
-	    }
+        if (line.find(userName + ":") == 0)
+        {
+            lg2::error("Username Already Exists !!");
+            return false;
+        }
     }
     passwdFile.close();
 
@@ -796,16 +792,16 @@ bool pamUserCheckAuthenticate(std::string_view username,
         return false;
     }
 
-     retval = pam_acct_mgmt(localAuthHandle, PAM_DISALLOW_NULL_AUTHTOK);
-        
-     if(retval != PAM_SUCCESS)
-     {
-	     if(!((username == DEFAULT_USER)&&(retval == PAM_NEW_AUTHTOK_REQD)))
-	     {
-		     pam_end(localAuthHandle, PAM_SUCCESS);
-		     return false;
-	     }
-     }
+    retval = pam_acct_mgmt(localAuthHandle, PAM_DISALLOW_NULL_AUTHTOK);
+
+    if (retval != PAM_SUCCESS)
+    {
+        if (!((username == DEFAULT_USER) && (retval == PAM_NEW_AUTHTOK_REQD)))
+        {
+            pam_end(localAuthHandle, PAM_SUCCESS);
+            return false;
+        }
+    }
 
     if (pam_end(localAuthHandle, PAM_SUCCESS) != PAM_SUCCESS)
     {
@@ -1121,9 +1117,11 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
                 getUserServiceName().c_str(), userMgrObjBasePath,
                 userMgrInterface, createUserMethod);
             std::vector<std::string> groups = availableGroups;
-            //find media group and remove it, by default user privilege user should not have media privilege
+            // find media group and remove it, by default user privilege user
+            // should not have media privilege
             auto mediaGrpEntry = find(groups.begin(), groups.end(), mediaGroup);
-            if (mediaGrpEntry != groups.end()) {
+            if (mediaGrpEntry != groups.end())
+            {
                 groups.erase(mediaGrpEntry);
             }
             method.append(userName.c_str(), groups,
@@ -1326,9 +1324,9 @@ void UserAccess::readUserData()
                 "Corrupted IPMI user data file - invalid user info");
         }
         std::string userName = userInfo[jsonUserName].get<std::string>();
-        std::strncpy(reinterpret_cast<char*>(usersTbl.user[usrIndex].userName),
-                     userName.c_str(), ipmiMaxUserName);
-        usersTbl.user[usrIndex].userName[ipmiMaxUserName - 1] = '\0';
+        std::memset(usersTbl.user[usrIndex].userName, 0, ipmiMaxUserName);
+        std::memcpy(reinterpret_cast<char*>(usersTbl.user[usrIndex].userName),
+                    userName.c_str(), ipmiMaxUserName);
 
         std::vector<std::string> privilege =
             userInfo[jsonPriv].get<std::vector<std::string>>();
@@ -1530,9 +1528,9 @@ bool UserAccess::addUserEntry(const std::string& userName,
         lg2::error("No empty slots found");
         return false;
     }
-    std::strncpy(reinterpret_cast<char*>(userData->user[freeIndex].userName),
-                 userName.c_str(), ipmiMaxUserName);
-    userData->user[freeIndex].userName[ipmiMaxUserName - 1] = '\0';
+    std::memset(userData->user[freeIndex].userName, 0, ipmiMaxUserName);
+    std::memcpy(reinterpret_cast<char*>(userData->user[freeIndex].userName),
+                userName.c_str(), ipmiMaxUserName);
     uint8_t priv =
         static_cast<uint8_t>(UserAccess::convertToIPMIPrivilege(sysPriv)) &
         privMask;

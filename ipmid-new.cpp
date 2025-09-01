@@ -83,6 +83,8 @@ const static constexpr char* interfaceOobBiosConfigInventoryOobCrc =
     "xyz.openbmc_project.OobBiosConfigInventory.CRC.OobCrc";
 const static constexpr char* propertyBootOverride = "BootOverride";
 
+constexpr bool debug = false;
+
 unsigned short reserveSel(void)
 {
     // IPMI spec, Reservation ID, the value simply increases against each
@@ -421,14 +423,21 @@ void updateOwners(sdbusplus::asio::connection& conn, const std::string& name)
             {
                 uint8_t channel = getChannelByName(chName);
                 uniqueNameToChannelNumber[nameOwner] = channel;
-                lg2::info(
-                    "New interface mapping: {INTERFACE} -> channel {CHANNEL}",
-                    "INTERFACE", name, "CHANNEL", channel);
+                if constexpr (debug)
+                {
+                    lg2::info(
+                        "New interface mapping: {INTERFACE} -> channel {CHANNEL}",
+                        "INTERFACE", name, "CHANNEL", channel);
+                }
             }
             catch (const std::exception& e)
             {
-                lg2::info("Failed interface mapping, no such name: {INTERFACE}",
-                          "INTERFACE", name);
+                if constexpr (debug)
+                {
+                    lg2::info(
+                        "Failed interface mapping, no such name: {INTERFACE}",
+                        "INTERFACE", name);
+                }
             }
         },
         "org.freedesktop.DBus", "/", "org.freedesktop.DBus", "GetNameOwner",
@@ -492,13 +501,20 @@ void nameChangeHandler(sdbusplus::message_t& message)
         {
             uint8_t channel = getChannelByName(chName);
             uniqueNameToChannelNumber[newOwner] = channel;
-            lg2::info("New interface mapping: {INTERFACE} -> channel {CHANNEL}",
-                      "INTERFACE", name, "CHANNEL", channel);
+            if constexpr (debug)
+            {
+                lg2::info(
+                    "New interface mapping: {INTERFACE} -> channel {CHANNEL}",
+                    "INTERFACE", name, "CHANNEL", channel);
+            }
         }
         catch (const std::exception& e)
         {
-            lg2::info("Failed interface mapping, no such name: {INTERFACE}",
-                      "INTERFACE", name);
+            if constexpr (debug)
+            {
+                lg2::info("Failed interface mapping, no such name: {INTERFACE}",
+                          "INTERFACE", name);
+            }
         }
     }
 };
