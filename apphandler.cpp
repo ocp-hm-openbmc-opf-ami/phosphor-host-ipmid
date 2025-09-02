@@ -94,6 +94,8 @@ constexpr auto fwVerIntf = "xyz.openbmc_project.Software.Version";
 
 constexpr auto propIntf = "org.freedesktop.DBus.Properties";
 
+constexpr bool debug = false;
+
 // Bitfield definitions for DATA_CORRUPT (0x57)
 enum SelfTestErrorBitfield : uint8_t
 {
