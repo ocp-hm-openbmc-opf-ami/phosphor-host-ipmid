@@ -549,14 +549,14 @@ std::string toHexString(const T& value)
     if constexpr (std::is_integral_v<T>)
     { // Handle integer case
         hexStream << "0x" << std::hex << std::setw(2) << std::setfill('0')
-                  << static_cast<uint8_t>(value);
+                  << static_cast<unsigned int>(value);
     }
     else
     {
         for (const auto& byte : value)
         {
             hexStream << " 0x" << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<uint8_t>(byte);
+                      << static_cast<unsigned int>(byte);
         }
     }
     return hexStream.str();
