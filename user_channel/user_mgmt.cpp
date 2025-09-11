@@ -19,6 +19,7 @@
 #include "channel_layer.hpp"
 #include "channel_mgmt.hpp"
 
+#include <grp.h>
 #include <security/pam_appl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -73,6 +74,8 @@ static constexpr const char* ipmiMutexCleanupLockFile =
 static constexpr const char* ipmiUserSignalLockFile =
     "/var/lib/ipmi/ipmi_usr_signal_mutex";
 static constexpr const char* ipmiUserDataFile = "/var/lib/ipmi/ipmi_user.json";
+static constexpr const char* ipmiUserDataBackupFile =
+    "/var/lib/ipmi/ipmi_user_backup.json";
 static constexpr const char* ipmiGrpName = "ipmi";
 static constexpr size_t privNoAccess = 0xF;
 static constexpr size_t privMask = 0xF;
@@ -80,6 +83,8 @@ static constexpr size_t privMask = 0xF;
 // User manager related
 static constexpr const char* userMgrObjBasePath = "/xyz/openbmc_project/user";
 static constexpr const char* userObjBasePath = "/xyz/openbmc_project/user";
+static constexpr const char* AccountPolicyInterface =
+    "xyz.openbmc_project.User.AccountPolicy";
 static constexpr const char* userMgrInterface =
     "xyz.openbmc_project.User.Manager";
 static constexpr const char* usersInterface =
@@ -87,6 +92,8 @@ static constexpr const char* usersInterface =
 static constexpr const char* deleteUserInterface =
     "xyz.openbmc_project.Object.Delete";
 
+static constexpr const char* ChannelInterfaceMapMethod =
+    "GetChannelInterfaceMap";
 static constexpr const char* createUserMethod = "CreateUser";
 static constexpr const char* deleteUserMethod = "Delete";
 static constexpr const char* renameUserMethod = "RenameUser";
@@ -99,10 +106,13 @@ static constexpr const char* allGrpProperty = "AllGroups";
 static constexpr const char* userPrivProperty = "UserPrivilege";
 static constexpr const char* userGrpProperty = "UserGroups";
 static constexpr const char* userEnabledProperty = "UserEnabled";
+static constexpr const char* userChannelAccessProperty = "UserChannelAccess";
 // OEM Privilege
 static constexpr const char* mediaGroup = "media";
 // SNMP Trap V3
 static constexpr const char* snmpGroup = "snmp";
+
+std::vector<uint8_t> listAvailableChannels;
 
 static std::array<std::string, (PRIVILEGE_OEM + 1)> ipmiPrivIndex = {
     "priv-reserved", // PRIVILEGE_RESERVED - 0
@@ -211,13 +221,18 @@ int getUserNameFromPath(const std::string& path, std::string& userName)
 }
 
 void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
-                      const std::string& userName, const std::string& priv,
-                      const bool& enabled, const std::string& newUserName)
+                      const std::string& userName,
+                      const std::vector<std::string> priv, const bool& enabled,
+                      const std::string& newUserName,
+                      std::vector<uint8_t> userChannelAccess)
 {
+    std::vector<uint8_t> availableChannels = usrAccess.getAvailableChannels();
+
     UsersTbl* userData = usrAccess.getUsersTblPtr();
     if (userEvent == UserUpdateEvent::userCreated)
     {
-        if (usrAccess.addUserEntry(userName, priv, enabled) == false)
+        if (usrAccess.addUserEntry(userName, priv, userChannelAccess,
+                                   enabled) == false)
         {
             return;
         }
@@ -252,22 +267,20 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
             }
             case UserUpdateEvent::userPrivUpdated:
             {
-                uint8_t userPriv =
-                    static_cast<uint8_t>(
-                        UserAccess::convertToIPMIPrivilege(priv)) &
-                    privMask;
-                // Update all channels privileges, only if it is not equivalent
-                // to getUsrMgmtSyncIndex()
-                if (userData->user[usrIndex]
-                        .userPrivAccess[UserAccess::getUsrMgmtSyncIndex()]
-                        .privilege != userPriv)
+                size_t i = 0;
+                for (size_t chIndex = 0; chIndex < ipmiMaxChannels; ++chIndex)
                 {
-                    for (size_t chIndex = 0; chIndex < ipmiMaxChannels;
-                         ++chIndex)
+                    for (i = 0; i < availableChannels.size(); i++)
                     {
-                        userData->user[usrIndex]
-                            .userPrivAccess[chIndex]
-                            .privilege = userPriv;
+                        if ((chIndex == availableChannels[i]) && (chIndex != 0))
+                        {
+                            uint8_t userPriv = static_cast<uint8_t>(
+                                (UserAccess::convertToIPMIPrivilege(
+                                    priv[i]))&privMask);
+                            userData->user[usrIndex]
+                                .userPrivAccess[chIndex]
+                                .privilege = userPriv;
+                        }
                     }
                 }
                 break;
@@ -285,6 +298,30 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
             case UserUpdateEvent::userStateUpdated:
             {
                 userData->user[usrIndex].userEnabled = enabled;
+                break;
+            }
+            case UserUpdateEvent::userChannelAccessUpdated:
+            {
+                size_t i;
+                for (size_t chIndex = 0; chIndex < ipmiMaxChannels; ++chIndex)
+                {
+                    for (i = 0; i < availableChannels.size(); i++)
+                    {
+                        if ((chIndex == availableChannels[i]) &&
+                            (chIndex != 0) && (i < userChannelAccess.size()))
+                        {
+                            userData->user[usrIndex]
+                                .userPrivAccess[chIndex]
+                                .ipmiEnabled = userChannelAccess[i];
+                            userData->user[usrIndex]
+                                .userPrivAccess[chIndex]
+                                .linkAuthEnabled = userChannelAccess[i];
+                            userData->user[usrIndex]
+                                .userPrivAccess[chIndex]
+                                .accessCallback = !(userChannelAccess[i]);
+                        }
+                    }
+                }
                 break;
             }
             default:
@@ -307,8 +344,10 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
 {
     static sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
     std::string signal = msg.get_member();
-    std::string userName, priv, newUserName;
+    std::string userName, newUserName;
     std::vector<std::string> groups;
+    std::vector<std::string> priv;
+    std::vector<uint8_t> userChannelAccessVal;
     bool enabled = false;
     UserUpdateEvent userEvent = UserUpdateEvent::reservedEvent;
     if (signal == intfAddedSignal)
@@ -317,8 +356,8 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
         DbusUserObjValue objValue;
         msg.read(objPath, objValue);
         getUserNameFromPath(objPath.str, userName);
-        if (usrAccess.getUserObjProperties(objValue, groups, priv, enabled) !=
-            0)
+        if (usrAccess.getUserObjProperties(objValue, groups, priv,
+                                           userChannelAccessVal, enabled) != 0)
         {
             return;
         }
@@ -374,7 +413,7 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
             std::string member = prop.first;
             if (member == userPrivProperty)
             {
-                priv = std::get<std::string>(prop.second);
+                priv = std::get<std::vector<std::string>>(prop.second);
                 userEvent = UserUpdateEvent::userPrivUpdated;
             }
             else if (member == userGrpProperty)
@@ -387,6 +426,12 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                 enabled = std::get<bool>(prop.second);
                 userEvent = UserUpdateEvent::userStateUpdated;
             }
+            else if (member == userChannelAccessProperty)
+            {
+                userChannelAccessVal =
+                    std::get<std::vector<uint8_t>>(prop.second);
+                userEvent = UserUpdateEvent::userChannelAccessUpdated;
+            }
             // Process based on event type.
             if (userEvent == UserUpdateEvent::userGrpUpdated)
             {
@@ -395,7 +440,8 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                 {
                     // remove user from ipmi user list.
                     userUpdateHelper(usrAccess, UserUpdateEvent::userDeleted,
-                                     userName, priv, enabled, newUserName);
+                                     userName, priv, enabled, newUserName,
+                                     userChannelAccessVal);
                 }
                 else
                 {
@@ -417,23 +463,24 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                         return;
                     }
                     usrAccess.getUserProperties(properties, groups, priv,
-                                                enabled);
+                                                userChannelAccessVal, enabled);
                     // add user to ipmi user list.
                     userUpdateHelper(usrAccess, UserUpdateEvent::userCreated,
-                                     userName, priv, enabled, newUserName);
+                                     userName, priv, enabled, newUserName,
+                                     userChannelAccessVal);
                 }
             }
             else if (userEvent != UserUpdateEvent::reservedEvent)
             {
                 userUpdateHelper(usrAccess, userEvent, userName, priv, enabled,
-                                 newUserName);
+                                 newUserName, userChannelAccessVal);
             }
         }
     }
     else if (userEvent != UserUpdateEvent::reservedEvent)
     {
         userUpdateHelper(usrAccess, userEvent, userName, priv, enabled,
-                         newUserName);
+                         newUserName, userChannelAccessVal);
     }
     return;
 }
@@ -948,10 +995,28 @@ Cc UserAccess::setUserPayloadAccess(
     return ccSuccess;
 }
 
+bool UserAccess::isDefaultUser(const std::string& userName)
+{
+    struct group* grpIpmi = getgrnam("ipmi");
+    std::string defaultUser =
+        (grpIpmi && grpIpmi->gr_mem) ? grpIpmi->gr_mem[0] : "";
+    if (userName == defaultUser)
+    {
+        lg2::info("Privilege update attempt blocked for default user: {USER}",
+                  "USER", userName);
+        return true;
+    }
+    return false;
+}
+
 Cc UserAccess::setUserPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
                                       const UserPrivAccess& privAccess,
                                       const bool& otherPrivUpdates)
 {
+    std::vector<uint8_t> channelAccessIPMI;
+    std::vector<std::string> listPriv;
+    uint8_t tmpChNum = 0;
+    bool dbusUpdateRequired = false;
     if (!isValidChannel(chNum))
     {
         return ccInvalidFieldRequest;
@@ -971,22 +1036,67 @@ Cc UserAccess::setUserPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
         lg2::debug("User name not set / invalid");
         return ccUnspecifiedError;
     }
+    if (isDefaultUser(userName))
+    {
+        lg2::info("Privilege update attempt blocked for default user: {USER}",
+                  "USER", userName);
+        return ccActionNotAllowed;
+    }
     std::string priv = convertToSystemPrivilege(
         static_cast<CommandPrivilege>(privAccess.privilege));
-    uint8_t syncIndex = getUsrMgmtSyncIndex();
-    if (chNum == syncIndex &&
-        privAccess.privilege != userInfo->userPrivAccess[syncIndex].privilege)
+    listAvailableChannels = UserAccess::getAvailableChannels();
+    for (size_t i = 0; i < listAvailableChannels.size(); ++i)
+    {
+        if (chNum == listAvailableChannels[i])
+        {
+            dbusUpdateRequired = true;
+            priv = convertToSystemPrivilege(
+                static_cast<CommandPrivilege>(privAccess.privilege));
+            listPriv.push_back(priv);
+            userInfo->userPrivAccess[chNum].privilege = privAccess.privilege;
+        }
+        else
+        {
+            tmpChNum = listAvailableChannels[i];
+            priv = convertToSystemPrivilege(static_cast<CommandPrivilege>(
+                userInfo->userPrivAccess[tmpChNum].privilege));
+            listPriv.push_back(priv);
+        }
+    }
+    if (dbusUpdateRequired)
     {
         sdbusplus::message::object_path tempUserPath(userObjBasePath);
         tempUserPath /= userName;
         std::string userPath(tempUserPath);
         setDbusProperty(bus, getUserServiceName(), userPath, usersInterface,
-                        userPrivProperty, priv);
+                        userPrivProperty, listPriv);
     }
-    userInfo->userPrivAccess[chNum].privilege = privAccess.privilege;
-
+    dbusUpdateRequired = false;
     if (otherPrivUpdates)
     {
+        for (size_t i = 0; i < listAvailableChannels.size(); ++i)
+        {
+            if (chNum == listAvailableChannels[i])
+            {
+                dbusUpdateRequired = true;
+                channelAccessIPMI.push_back(privAccess.ipmiEnabled);
+            }
+            else
+            {
+                tmpChNum = listAvailableChannels[i];
+                channelAccessIPMI.push_back(
+                    userInfo->userPrivAccess[tmpChNum].ipmiEnabled);
+            }
+        }
+        if (dbusUpdateRequired)
+        {
+            sdbusplus::message::object_path tempUserPath(userObjBasePath);
+            tempUserPath /= userName;
+            std::string userPath(tempUserPath);
+            setDbusProperty(bus, getUserServiceName(), userPath, usersInterface,
+                            userChannelAccessProperty, channelAccessIPMI);
+        }
+
         userInfo->userPrivAccess[chNum].ipmiEnabled = privAccess.ipmiEnabled;
         userInfo->userPrivAccess[chNum].linkAuthEnabled =
             privAccess.linkAuthEnabled;
@@ -1065,6 +1175,9 @@ bool UserAccess::isIpmiInAvailableGroupList()
 
 Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
 {
+    std::vector<uint8_t> listAvailableChannels;
+    std::vector<uint8_t> channelAccessIPMI;
+    std::vector<std::string> privilegeList;
     if (!isValidUserId(userId))
     {
         return ccParmOutOfRange;
@@ -1124,8 +1237,15 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
             {
                 groups.erase(mediaGrpEntry);
             }
-            method.append(userName.c_str(), groups,
-                          ipmiPrivIndex[PRIVILEGE_USER], false);
+            listAvailableChannels = UserAccess::getAvailableChannels();
+            privilegeList.resize(listAvailableChannels.size(),
+                                 ipmiPrivIndex[PRIVILEGE_USER]);
+            for (size_t i = 0; i < listAvailableChannels.size(); ++i)
+            {
+                channelAccessIPMI.push_back(1);
+            }
+            method.append(userName.c_str(), groups, privilegeList,
+                          channelAccessIPMI, false);
             auto reply = bus.call(method);
         }
         catch (const sdbusplus::exception_t& e)
@@ -1494,16 +1614,23 @@ void UserAccess::writeUserData()
         lg2::error("Error in renaming temporary IPMI user data file");
         throw std::runtime_error("Error in renaming IPMI user data file");
     }
+    std::filesystem::copy_file(
+        ipmiUserDataFile, "/var/lib/ipmi/ipmi_user_backup.json",
+        std::filesystem::copy_options::overwrite_existing);
     // Update the timestamp
     fileLastUpdatedTime = getUpdatedFileTime();
     return;
 }
 
-bool UserAccess::addUserEntry(const std::string& userName,
-                              const std::string& sysPriv, const bool& enabled)
+bool UserAccess::addUserEntry(
+    const std::string& userName, const std::vector<std::string>& sysPriv,
+    const std::vector<uint8_t>& userChannelAccess, const bool& enabled)
 {
+    bool updateRequired = true;
     UsersTbl* userData = getUsersTblPtr();
+    std::vector<uint8_t> availableChannels = UserAccess::getAvailableChannels();
     size_t freeIndex = 0xFF;
+    uint8_t priv;
     // user index 0 is reserved, starts with 1
     for (size_t usrIndex = 1; usrIndex <= ipmiMaxUsers; ++usrIndex)
     {
@@ -1528,19 +1655,58 @@ bool UserAccess::addUserEntry(const std::string& userName,
         lg2::error("No empty slots found");
         return false;
     }
+    if (!sysPriv.empty())
+    {
     std::memset(userData->user[freeIndex].userName, 0, ipmiMaxUserName);
     std::memcpy(reinterpret_cast<char*>(userData->user[freeIndex].userName),
                 userName.c_str(), ipmiMaxUserName);
-    uint8_t priv =
-        static_cast<uint8_t>(UserAccess::convertToIPMIPrivilege(sysPriv)) &
-        privMask;
+    }
+    if (!sysPriv.empty())
+    {
+        priv = static_cast<uint8_t>(
+                   UserAccess::convertToIPMIPrivilege(sysPriv[0])) &
+               privMask;
+    }
+    size_t chIter = 0;
+    std::stringstream ss;
     for (size_t chIndex = 0; chIndex < ipmiMaxChannels; ++chIndex)
     {
-        userData->user[freeIndex].userPrivAccess[chIndex].privilege = priv;
-        userData->user[freeIndex].userPrivAccess[chIndex].ipmiEnabled = true;
-        userData->user[freeIndex].userPrivAccess[chIndex].linkAuthEnabled =
-            true;
-        userData->user[freeIndex].userPrivAccess[chIndex].accessCallback = true;
+        for (chIter = 0;
+             ((chIter < availableChannels.size()) &&
+              (chIter < sysPriv.size()) && (chIter < userChannelAccess.size()));
+             chIter++)
+        {
+            if ((chIndex == availableChannels[chIter]) && (chIndex != 0))
+            {
+                userData->user[freeIndex].userPrivAccess[chIndex].privilege =
+                    (static_cast<uint8_t>(
+                         UserAccess::convertToIPMIPrivilege(sysPriv[chIter])) &
+                     privMask);
+                userData->user[freeIndex].userPrivAccess[chIndex].ipmiEnabled =
+                    userChannelAccess[chIter];
+                userData->user[freeIndex]
+                    .userPrivAccess[chIndex]
+                    .linkAuthEnabled = userChannelAccess[chIter];
+                userData->user[freeIndex]
+                    .userPrivAccess[chIndex]
+                    .accessCallback = userChannelAccess[chIter];
+
+                updateRequired = false;
+                break;
+            }
+            updateRequired = true;
+        }
+        if (updateRequired)
+        {
+            userData->user[freeIndex].userPrivAccess[chIndex].linkAuthEnabled =
+                true;
+            userData->user[freeIndex].userPrivAccess[chIndex].accessCallback =
+                true;
+            userData->user[freeIndex].userPrivAccess[chIndex].ipmiEnabled =
+                true;
+            userData->user[freeIndex].userPrivAccess[chIndex].privilege = priv;
+            updateRequired = true;
+        }
     }
     userData->user[freeIndex].userInSystem = true;
     userData->user[freeIndex].userEnabled = enabled;
@@ -1555,6 +1721,12 @@ void UserAccess::deleteUserIndex(const size_t& usrIdx)
     std::string userName(
         reinterpret_cast<char*>(userData->user[usrIdx].userName), 0,
         ipmiMaxUserName);
+    if (isDefaultUser(userName))
+    {
+        lg2::info("Privilege update attempt blocked for default user: {USER}",
+                  "USER", userName);
+        return;
+    }
     ipmiClearUserEntryPassword(userName);
     std::fill(static_cast<uint8_t*>(userData->user[usrIdx].userName),
               static_cast<uint8_t*>(userData->user[usrIdx].userName) +
@@ -1639,16 +1811,17 @@ std::timespec UserAccess::getUpdatedFileTime()
     return fileStat.st_mtim;
 }
 
-void UserAccess::getUserProperties(const DbusUserObjProperties& properties,
-                                   std::vector<std::string>& usrGrps,
-                                   std::string& usrPriv, bool& usrEnabled)
+void UserAccess::getUserProperties(
+    const DbusUserObjProperties& properties, std::vector<std::string>& usrGrps,
+    std::vector<std::string>& usrPriv,
+    std::vector<uint8_t>& userChannelAccessVal, bool& usrEnabled)
 {
     for (const auto& t : properties)
     {
         std::string key = t.first;
         if (key == userPrivProperty)
         {
-            usrPriv = std::get<std::string>(t.second);
+            usrPriv = std::get<std::vector<std::string>>(t.second);
         }
         else if (key == userGrpProperty)
         {
@@ -1658,18 +1831,24 @@ void UserAccess::getUserProperties(const DbusUserObjProperties& properties,
         {
             usrEnabled = std::get<bool>(t.second);
         }
+        else if (key == userChannelAccessProperty)
+        {
+            userChannelAccessVal = std::get<std::vector<uint8_t>>(t.second);
+        }
     }
     return;
 }
 
-int UserAccess::getUserObjProperties(const DbusUserObjValue& userObjs,
-                                     std::vector<std::string>& usrGrps,
-                                     std::string& usrPriv, bool& usrEnabled)
+int UserAccess::getUserObjProperties(
+    const DbusUserObjValue& userObjs, std::vector<std::string>& usrGrps,
+    std::vector<std::string>& usrPriv, std::vector<uint8_t>& userChannelAccess,
+    bool& usrEnabled)
 {
     auto usrObj = userObjs.find(usersInterface);
     if (usrObj != userObjs.end())
     {
-        getUserProperties(usrObj->second, usrGrps, usrPriv, usrEnabled);
+        getUserProperties(usrObj->second, usrGrps, usrPriv, userChannelAccess,
+                          usrEnabled);
         return 0;
     }
     return -EIO;
@@ -1677,6 +1856,7 @@ int UserAccess::getUserObjProperties(const DbusUserObjValue& userObjs,
 
 void UserAccess::cacheUserDataFile()
 {
+    std::vector<uint8_t> availableChannels = UserAccess::getAvailableChannels();
     boost::interprocess::scoped_lock<boost::interprocess::named_recursive_mutex>
         userLock{*userMutex};
     try
@@ -1772,7 +1952,8 @@ void UserAccess::cacheUserDataFile()
             (userData->user[usrIdx].userName[0] != '\0'))
         {
             std::vector<std::string> usrGrps;
-            std::string usrPriv;
+            std::vector<std::string> usrPriv;
+            std::vector<uint8_t> userChannelAccessVal;
 
             std::string userName(
                 reinterpret_cast<char*>(userData->user[usrIdx].userName), 0,
@@ -1788,7 +1969,7 @@ void UserAccess::cacheUserDataFile()
 
                 // User exist. Lets check and update other fileds
                 getUserObjProperties(usrObj->second, usrGrps, usrPriv,
-                                     usrEnabled);
+                                     userChannelAccessVal, usrEnabled);
                 if (std::find(usrGrps.begin(), usrGrps.end(), ipmiGrpName) ==
                     usrGrps.end())
                 {
@@ -1798,40 +1979,44 @@ void UserAccess::cacheUserDataFile()
                 }
                 else
                 {
-                    // Group "ipmi" is present so lets update other properties
-                    // in IPMI
-                    uint8_t priv = UserAccess::convertToIPMIPrivilege(usrPriv) &
-                                   privMask;
-                    // Update all channels priv, only if it is not equivalent to
-                    // getUsrMgmtSyncIndex()
-                    if (userData->user[usrIdx]
-                            .userPrivAccess[getUsrMgmtSyncIndex()]
-                            .privilege != priv)
+                    size_t i;
+                    for (size_t chIndex = 0; chIndex < ipmiMaxChannels;
+                         ++chIndex)
                     {
-                        updateRequired = true;
-                        for (size_t chIndex = 0; chIndex < ipmiMaxChannels;
-                             ++chIndex)
+                        for (i = 0; i < availableChannels.size(); i++)
                         {
-                            userData->user[usrIdx]
-                                .userPrivAccess[chIndex]
-                                .privilege = priv;
+                            if ((chIndex) == availableChannels[i])
+                            {
+                                if (userData->user[usrIdx]
+                                        .userPrivAccess[chIndex]
+                                        .privilege !=
+                                    (UserAccess::convertToIPMIPrivilege(
+                                         usrPriv[i]) &
+                                     privMask))
+                                {
+                                    updateRequired = true;
+                                    userData->user[usrIdx]
+                                        .userPrivAccess[chIndex]
+                                        .privilege =
+                                        (UserAccess::convertToIPMIPrivilege(
+                                             usrPriv[i]) &
+                                         privMask);
+                                }
+                            }
                         }
                     }
-                    if (userData->user[usrIdx].userEnabled != usrEnabled)
-                    {
-                        updateRequired = true;
-                        userData->user[usrIdx].userEnabled = usrEnabled;
-                    }
                 }
-
-                // We are done with this obj. lets delete from MAP
-                managedObjs.erase(usrObj);
+                if (userData->user[usrIdx].userEnabled != usrEnabled)
+                {
+                    updateRequired = true;
+                    userData->user[usrIdx].userEnabled = usrEnabled;
+                }
             }
-            else
-            {
-                updateRequired = true;
-                deleteUserIndex(usrIdx);
-            }
+        }
+        else
+        {
+            updateRequired = true;
+            deleteUserIndex(usrIdx);
         }
     }
 
@@ -1839,8 +2024,9 @@ void UserAccess::cacheUserDataFile()
     // Add them to ipmi data base
     for (const auto& usrObj : managedObjs)
     {
-        std::vector<std::string> usrGrps;
-        std::string usrPriv, userName;
+        std::vector<std::string> usrGrps, usrPriv;
+        std::string userName;
+        std::vector<uint8_t> userChannelAccess;
         bool usrEnabled = false;
         std::string usrObjPath = std::string(usrObj.first);
         if (getUserNameFromPath(usrObj.first.str, userName) != 0)
@@ -1848,14 +2034,16 @@ void UserAccess::cacheUserDataFile()
             lg2::error("Error in user object path");
             continue;
         }
-        getUserObjProperties(usrObj.second, usrGrps, usrPriv, usrEnabled);
+        getUserObjProperties(usrObj.second, usrGrps, usrPriv, userChannelAccess,
+                             usrEnabled);
         // Add 'ipmi' group users
         if (std::find(usrGrps.begin(), usrGrps.end(), ipmiGrpName) !=
             usrGrps.end())
         {
             updateRequired = true;
             // CREATE NEW USER
-            if (true != addUserEntry(userName, usrPriv, usrEnabled))
+            if (true !=
+                addUserEntry(userName, usrPriv, userChannelAccess, usrEnabled))
             {
                 break;
             }
@@ -1869,5 +2057,33 @@ void UserAccess::cacheUserDataFile()
     }
 
     return;
+}
+std::vector<uint8_t> UserAccess::getAvailableChannels()
+{
+    std::vector<uint8_t> channelMap;
+    try
+    {
+        auto bus = sdbusplus::bus::new_default();
+        auto methodCall = bus.new_method_call(
+            userMgrInterface, userMgrObjBasePath, AccountPolicyInterface,
+            ChannelInterfaceMapMethod);
+
+        auto reply = bus.call(methodCall);
+
+        std::vector<std::pair<uint8_t, std::string>> channelList;
+        reply.read(channelList);
+
+        for (const auto& channel : channelList)
+        {
+            channelMap.push_back(channel.first);
+        }
+    }
+    catch (const sdbusplus::exception_t& e)
+    {
+        lg2::error("unable to get available channels: {ERROR}", "ERROR",
+                   e.what());
+    }
+
+    return channelMap;
 }
 } // namespace ipmi

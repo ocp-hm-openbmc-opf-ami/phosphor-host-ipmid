@@ -28,8 +28,10 @@
 namespace ipmi
 {
 
-using DbusUserPropVariant =
-    std::variant<std::vector<std::string>, std::string, bool>;
+static constexpr uint8_t ccActionNotAllowed = 0x80;
+
+using DbusUserPropVariant = std::variant<std::vector<std::string>, std::string,
+                                         bool, std::vector<uint8_t>>;
 
 using DbusUserObjPath = sdbusplus::message::object_path;
 
@@ -49,7 +51,8 @@ enum class UserUpdateEvent
     userRenamed,
     userGrpUpdated,
     userPrivUpdated,
-    userStateUpdated
+    userStateUpdated,
+    userChannelAccessUpdated
 };
 
 /** @struct UserPrivAccess
@@ -265,6 +268,17 @@ class UserAccess
                               const UserPrivAccess& privAccess,
                               const bool& otherPrivUpdates);
 
+    /** @brief Check if the given user is the default IPMI user.
+     *
+     * This function determines whether the specified user is the default
+     * IPMI user by checking the first member of the "ipmi" group.
+     *
+     * @param[in] userName The name of the user to check.
+     * @return true if the user is the first member of the "ipmi" group.
+     * @return false otherwise.
+     */
+    bool isDefaultUser(const std::string& userName);
+
     /** @brief to get user payload access details from userInfo entry.
      *
      *  @param[in] userInfo    - userInfo entry in usersTbl.
@@ -336,12 +350,14 @@ class UserAccess
      *  @param[out] usrGrps - user group details
      *  @param[out] usrPriv - user privilege
      *  @param[out] usrEnabled - enabled state of the user.
+     *  @param[out] userChannelAccess - ChannelAccess of the user
      *
      *  @return 0 for success, -errno for failure.
      */
-    void getUserProperties(const DbusUserObjProperties& properties,
-                           std::vector<std::string>& usrGrps,
-                           std::string& usrPriv, bool& usrEnabled);
+    void getUserProperties(
+        const DbusUserObjProperties& properties,
+        std::vector<std::string>& usrGrps, std::vector<std::string>& usrPriv,
+        std::vector<uint8_t>& userChannelAccess, bool& usrEnabled);
 
     /** @brief provides user details from D-Bus user object data
      *
@@ -349,22 +365,27 @@ class UserAccess
      *  @param[out] usrGrps - user group details
      *  @param[out] usrPriv - user privilege
      *  @param[out] usrEnabled - enabled state of the user.
+     *  @param[out] userChannelAccess - ChannelAccess of the user
      *
      *  @return 0 for success, -errno for failure.
      */
-    int getUserObjProperties(const DbusUserObjValue& userObjs,
-                             std::vector<std::string>& usrGrps,
-                             std::string& usrPriv, bool& usrEnabled);
+    int getUserObjProperties(
+        const DbusUserObjValue& userObjs, std::vector<std::string>& usrGrps,
+        std::vector<std::string>& usrPriv,
+        std::vector<uint8_t>& userChannelAccess, bool& usrEnabled);
 
     /** @brief function to add user entry information to the configuration
      *
      *  @param[in] userName - user name
      *  @param[in] priv - privilege of the user
      *  @param[in] enabled - enabled state of the user
+     *  @param[in] userChannelAccess - ChannelAccess of the user
      *
      *  @return true for success, false for failure
      */
-    bool addUserEntry(const std::string& userName, const std::string& priv,
+    bool addUserEntry(const std::string& userName,
+                      const std::vector<std::string>& priv,
+                      const std::vector<uint8_t>& userChannelAccess,
                       const bool& enabled);
 
     /** @brief function to delete user entry based on user index
@@ -381,6 +402,21 @@ class UserAccess
 
     std::unique_ptr<boost::interprocess::named_recursive_mutex> userMutex{
         nullptr};
+
+    /** @brief Retrieves a list of available IPMI channels from the system.
+     *
+     * This function queries the D-Bus service
+     * `xyz.openbmc_project.User.Manager` for the `GetChannelInterfaceMap`
+     * method exposed by the interface `xyz.openbmc_project.User.AccountPolicy`.
+     * It returns a vector of available channel numbers (uint8_t) based on the
+     * system's current network configuration.
+     *
+     * @return std::vector<uint8_t> A list of available channel numbers.
+     *
+     * @note If the D-Bus method call fails, an error is logged and an empty
+     * vector is returned.
+     */
+    std::vector<uint8_t> getAvailableChannels();
 
   private:
     UsersTbl usersTbl;
