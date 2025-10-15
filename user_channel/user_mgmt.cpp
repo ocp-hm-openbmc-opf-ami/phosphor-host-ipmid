@@ -35,6 +35,7 @@
 #include <xyz/openbmc_project/User/Common/error.hpp>
 
 #include <cerrno>
+#include <filesystem>
 #include <fstream>
 #include <regex>
 #include <variant>
@@ -73,6 +74,8 @@ static constexpr const char* ipmiMutexCleanupLockFile =
 static constexpr const char* ipmiUserSignalLockFile =
     "/var/lib/ipmi/ipmi_usr_signal_mutex";
 static constexpr const char* ipmiUserDataFile = "/var/lib/ipmi/ipmi_user.json";
+static constexpr const char* ipmiUserDataBackupFile =
+    "/var/lib/ipmi/ipmi_user_backup.json";
 static constexpr const char* ipmiGrpName = "ipmi";
 static constexpr size_t privNoAccess = 0xF;
 static constexpr size_t privMask = 0xF;
@@ -99,6 +102,7 @@ static constexpr const char* allGrpProperty = "AllGroups";
 static constexpr const char* userPrivProperty = "UserPrivilege";
 static constexpr const char* userGrpProperty = "UserGroups";
 static constexpr const char* userEnabledProperty = "UserEnabled";
+static constexpr const char* userSnmpProperty = "SNMPAccessEnableStatus";
 // OEM Privilege
 static constexpr const char* mediaGroup = "media";
 // SNMP Trap V3
@@ -212,12 +216,14 @@ int getUserNameFromPath(const std::string& path, std::string& userName)
 
 void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
                       const std::string& userName, const std::string& priv,
-                      const bool& enabled, const std::string& newUserName)
+                      const bool& enabled, const std::string& newUserName,
+                      const bool& snmpAccess)
 {
     UsersTbl* userData = usrAccess.getUsersTblPtr();
     if (userEvent == UserUpdateEvent::userCreated)
     {
-        if (usrAccess.addUserEntry(userName, priv, enabled) == false)
+        if (usrAccess.addUserEntry(userName, priv, enabled, snmpAccess) ==
+            false)
         {
             return;
         }
@@ -287,6 +293,11 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
                 userData->user[usrIndex].userEnabled = enabled;
                 break;
             }
+            case UserUpdateEvent::userSnmpUpdated:
+            {
+                userData->user[usrIndex].snmpAccess = snmpAccess;
+                break;
+            }
             default:
             {
                 lg2::error("Unhandled user event: {USER_EVENT}", "USER_EVENT",
@@ -310,6 +321,7 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
     std::string userName, priv, newUserName;
     std::vector<std::string> groups;
     bool enabled = false;
+    bool snmpAccess = false;
     UserUpdateEvent userEvent = UserUpdateEvent::reservedEvent;
     if (signal == intfAddedSignal)
     {
@@ -317,8 +329,8 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
         DbusUserObjValue objValue;
         msg.read(objPath, objValue);
         getUserNameFromPath(objPath.str, userName);
-        if (usrAccess.getUserObjProperties(objValue, groups, priv, enabled) !=
-            0)
+        if (usrAccess.getUserObjProperties(objValue, groups, priv, enabled,
+                                           snmpAccess) != 0)
         {
             return;
         }
@@ -387,6 +399,11 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                 enabled = std::get<bool>(prop.second);
                 userEvent = UserUpdateEvent::userStateUpdated;
             }
+            else if (member == userSnmpProperty)
+            {
+                snmpAccess = std::get<bool>(prop.second);
+                userEvent = UserUpdateEvent::userSnmpUpdated;
+            }
             // Process based on event type.
             if (userEvent == UserUpdateEvent::userGrpUpdated)
             {
@@ -395,7 +412,8 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                 {
                     // remove user from ipmi user list.
                     userUpdateHelper(usrAccess, UserUpdateEvent::userDeleted,
-                                     userName, priv, enabled, newUserName);
+                                     userName, priv, enabled, newUserName,
+                                     snmpAccess);
                 }
                 else
                 {
@@ -417,23 +435,24 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                         return;
                     }
                     usrAccess.getUserProperties(properties, groups, priv,
-                                                enabled);
+                                                enabled, snmpAccess);
                     // add user to ipmi user list.
                     userUpdateHelper(usrAccess, UserUpdateEvent::userCreated,
-                                     userName, priv, enabled, newUserName);
+                                     userName, priv, enabled, newUserName,
+                                     snmpAccess);
                 }
             }
             else if (userEvent != UserUpdateEvent::reservedEvent)
             {
                 userUpdateHelper(usrAccess, userEvent, userName, priv, enabled,
-                                 newUserName);
+                                 newUserName, snmpAccess);
             }
         }
     }
     else if (userEvent != UserUpdateEvent::reservedEvent)
     {
         userUpdateHelper(usrAccess, userEvent, userName, priv, enabled,
-                         newUserName);
+                         newUserName, snmpAccess);
     }
     return;
 }
@@ -1196,6 +1215,7 @@ static constexpr const char* jsonIpmiEnabled = "ipmi_enabled";
 static constexpr const char* jsonLinkAuthEnabled = "link_auth_enabled";
 static constexpr const char* jsonAccCallbk = "access_callback";
 static constexpr const char* jsonUserEnabled = "user_enabled";
+static constexpr const char* jsonUserSnmpAccess = "snmp_access";
 static constexpr const char* jsonUserInSys = "user_in_system";
 static constexpr const char* jsonFixedUser = "fixed_user_name";
 static constexpr const char* payloadEnabledStr = "payload_enabled";
@@ -1404,6 +1424,8 @@ void UserAccess::readUserData()
                                       usersTbl.user[usrIndex]);
         usersTbl.user[usrIndex].userEnabled =
             userInfo[jsonUserEnabled].get<bool>();
+        usersTbl.user[usrIndex].snmpAccess =
+            userInfo[jsonUserSnmpAccess].get<bool>();
         usersTbl.user[usrIndex].userInSystem =
             userInfo[jsonUserInSys].get<bool>();
         usersTbl.user[usrIndex].fixedUserName =
@@ -1457,6 +1479,7 @@ void UserAccess::writeUserData()
         jsonUserInfo[jsonLinkAuthEnabled] = linkAuthEnabled;
         jsonUserInfo[jsonAccCallbk] = accessCallback;
         jsonUserInfo[jsonUserEnabled] = usersTbl.user[usrIndex].userEnabled;
+        jsonUserInfo[jsonUserSnmpAccess] = usersTbl.user[usrIndex].snmpAccess;
         jsonUserInfo[jsonUserInSys] = usersTbl.user[usrIndex].userInSystem;
         jsonUserInfo[jsonFixedUser] = usersTbl.user[usrIndex].fixedUserName;
 
@@ -1494,13 +1517,17 @@ void UserAccess::writeUserData()
         lg2::error("Error in renaming temporary IPMI user data file");
         throw std::runtime_error("Error in renaming IPMI user data file");
     }
+    std::filesystem::copy_file(
+        ipmiUserDataFile, ipmiUserDataBackupFile,
+        std::filesystem::copy_options::overwrite_existing);
     // Update the timestamp
     fileLastUpdatedTime = getUpdatedFileTime();
     return;
 }
 
 bool UserAccess::addUserEntry(const std::string& userName,
-                              const std::string& sysPriv, const bool& enabled)
+                              const std::string& sysPriv, const bool& enabled,
+                              const bool& snmpAccess)
 {
     UsersTbl* userData = getUsersTblPtr();
     size_t freeIndex = 0xFF;
@@ -1544,6 +1571,7 @@ bool UserAccess::addUserEntry(const std::string& userName,
     }
     userData->user[freeIndex].userInSystem = true;
     userData->user[freeIndex].userEnabled = enabled;
+    userData->user[freeIndex].snmpAccess = snmpAccess;
 
     return true;
 }
@@ -1569,6 +1597,7 @@ void UserAccess::deleteUserIndex(const size_t& usrIdx)
     }
     userData->user[usrIdx].userInSystem = false;
     userData->user[usrIdx].userEnabled = false;
+    userData->user[usrIdx].snmpAccess = false;
     return;
 }
 
@@ -1639,9 +1668,9 @@ std::timespec UserAccess::getUpdatedFileTime()
     return fileStat.st_mtim;
 }
 
-void UserAccess::getUserProperties(const DbusUserObjProperties& properties,
-                                   std::vector<std::string>& usrGrps,
-                                   std::string& usrPriv, bool& usrEnabled)
+void UserAccess::getUserProperties(
+    const DbusUserObjProperties& properties, std::vector<std::string>& usrGrps,
+    std::string& usrPriv, bool& usrEnabled, bool& snmpAccess)
 {
     for (const auto& t : properties)
     {
@@ -1658,18 +1687,23 @@ void UserAccess::getUserProperties(const DbusUserObjProperties& properties,
         {
             usrEnabled = std::get<bool>(t.second);
         }
+        else if (key == userSnmpProperty)
+        {
+            snmpAccess = std::get<bool>(t.second);
+        }
     }
     return;
 }
 
-int UserAccess::getUserObjProperties(const DbusUserObjValue& userObjs,
-                                     std::vector<std::string>& usrGrps,
-                                     std::string& usrPriv, bool& usrEnabled)
+int UserAccess::getUserObjProperties(
+    const DbusUserObjValue& userObjs, std::vector<std::string>& usrGrps,
+    std::string& usrPriv, bool& usrEnabled, bool& snmpAccess)
 {
     auto usrObj = userObjs.find(usersInterface);
     if (usrObj != userObjs.end())
     {
-        getUserProperties(usrObj->second, usrGrps, usrPriv, usrEnabled);
+        getUserProperties(usrObj->second, usrGrps, usrPriv, usrEnabled,
+                          snmpAccess);
         return 0;
     }
     return -EIO;
@@ -1699,6 +1733,7 @@ void UserAccess::cacheUserDataFile()
                     .stdPayloadEnables1[static_cast<uint8_t>(
                         ipmi::PayloadType::SOL)] = true;
             }
+            usersTbl.user[userIndex].snmpAccess = false;
         }
         writeUserData();
     }
@@ -1785,10 +1820,11 @@ void UserAccess::cacheUserDataFile()
             if (usrObj != managedObjs.end())
             {
                 bool usrEnabled = false;
+                bool snmpAccess = false;
 
                 // User exist. Lets check and update other fileds
                 getUserObjProperties(usrObj->second, usrGrps, usrPriv,
-                                     usrEnabled);
+                                     usrEnabled, snmpAccess);
                 if (std::find(usrGrps.begin(), usrGrps.end(), ipmiGrpName) ==
                     usrGrps.end())
                 {
@@ -1822,6 +1858,11 @@ void UserAccess::cacheUserDataFile()
                         updateRequired = true;
                         userData->user[usrIdx].userEnabled = usrEnabled;
                     }
+                    if (userData->user[usrIdx].snmpAccess != snmpAccess)
+                    {
+                        updateRequired = true;
+                        userData->user[usrIdx].snmpAccess = snmpAccess;
+                    }
                 }
 
                 // We are done with this obj. lets delete from MAP
@@ -1842,20 +1883,22 @@ void UserAccess::cacheUserDataFile()
         std::vector<std::string> usrGrps;
         std::string usrPriv, userName;
         bool usrEnabled = false;
+        bool snmpAccess = false;
         std::string usrObjPath = std::string(usrObj.first);
         if (getUserNameFromPath(usrObj.first.str, userName) != 0)
         {
             lg2::error("Error in user object path");
             continue;
         }
-        getUserObjProperties(usrObj.second, usrGrps, usrPriv, usrEnabled);
+        getUserObjProperties(usrObj.second, usrGrps, usrPriv, usrEnabled,
+                             snmpAccess);
         // Add 'ipmi' group users
         if (std::find(usrGrps.begin(), usrGrps.end(), ipmiGrpName) !=
             usrGrps.end())
         {
             updateRequired = true;
             // CREATE NEW USER
-            if (true != addUserEntry(userName, usrPriv, usrEnabled))
+            if (true != addUserEntry(userName, usrPriv, usrEnabled, snmpAccess))
             {
                 break;
             }
