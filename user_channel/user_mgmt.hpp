@@ -52,7 +52,7 @@ enum class UserUpdateEvent
     userGrpUpdated,
     userPrivUpdated,
     userStateUpdated,
-    userChannelAccessUpdated
+    userSnmpUpdated
 };
 
 /** @struct UserPrivAccess
@@ -78,6 +78,7 @@ struct UserInfo
     bool userEnabled;
     bool userInSystem;
     bool fixedUserName;
+    bool snmpAccess;
     PayloadAccess payloadAccess[ipmiMaxChannels];
 };
 
@@ -350,14 +351,14 @@ class UserAccess
      *  @param[out] usrGrps - user group details
      *  @param[out] usrPriv - user privilege
      *  @param[out] usrEnabled - enabled state of the user.
-     *  @param[out] userChannelAccess - ChannelAccess of the user
+     *  @param[out] snmpAccess - SNMP state of the user.
      *
      *  @return 0 for success, -errno for failure.
      */
-    void getUserProperties(
-        const DbusUserObjProperties& properties,
-        std::vector<std::string>& usrGrps, std::vector<std::string>& usrPriv,
-        std::vector<uint8_t>& userChannelAccess, bool& usrEnabled);
+    void getUserProperties(const DbusUserObjProperties& properties,
+                           std::vector<std::string>& usrGrps,
+                           std::string& usrPriv, bool& usrEnabled,
+                           bool& snmpAccess);
 
     /** @brief provides user details from D-Bus user object data
      *
@@ -365,28 +366,26 @@ class UserAccess
      *  @param[out] usrGrps - user group details
      *  @param[out] usrPriv - user privilege
      *  @param[out] usrEnabled - enabled state of the user.
-     *  @param[out] userChannelAccess - ChannelAccess of the user
+     *  @param[out] snmpAccess - SNMP state of the user.
      *
      *  @return 0 for success, -errno for failure.
      */
-    int getUserObjProperties(
-        const DbusUserObjValue& userObjs, std::vector<std::string>& usrGrps,
-        std::vector<std::string>& usrPriv,
-        std::vector<uint8_t>& userChannelAccess, bool& usrEnabled);
+    int getUserObjProperties(const DbusUserObjValue& userObjs,
+                             std::vector<std::string>& usrGrps,
+                             std::string& usrPriv, bool& usrEnabled,
+                             bool& snmpAccess);
 
     /** @brief function to add user entry information to the configuration
      *
      *  @param[in] userName - user name
      *  @param[in] priv - privilege of the user
      *  @param[in] enabled - enabled state of the user
-     *  @param[in] userChannelAccess - ChannelAccess of the user
+     *  @param[in] snmpAccess - SNMP  state of the user
      *
      *  @return true for success, false for failure
      */
-    bool addUserEntry(const std::string& userName,
-                      const std::vector<std::string>& priv,
-                      const std::vector<uint8_t>& userChannelAccess,
-                      const bool& enabled);
+    bool addUserEntry(const std::string& userName, const std::string& priv,
+                      const bool& enabled, const bool& snmpAccess);
 
     /** @brief function to delete user entry based on user index
      *
