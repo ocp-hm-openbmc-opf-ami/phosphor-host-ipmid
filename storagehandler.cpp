@@ -33,6 +33,7 @@
 void register_netfn_storage_functions() __attribute__((constructor));
 
 unsigned int g_sel_time = 0xFFFFFFFF;
+static bool SelTimeUnspecifiedState = false;
 namespace ipmi
 {
 namespace sensor
@@ -593,6 +594,39 @@ ipmi::RspType<uint32_t> // current time
         duration_cast<seconds>(microseconds(bmc_time_usec)).count());
 }
 
+ipmi::RspType<> resetSelUtcOffsetToUTC(int16_t offset)
+{
+    if (offset != 0)
+    {
+        return ipmi::responseUnspecifiedError();
+    }
+
+    try
+    {
+        sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
+
+        auto method = bus.new_method_call(
+            "org.freedesktop.timedate1", "/org/freedesktop/timedate1",
+            "org.freedesktop.timedate1", "SetTimezone");
+
+        method.append("UTC", false); // UTC
+
+        auto reply = bus.call(method);
+        if (reply.is_method_error())
+        {
+            return ipmi::responseUnspecifiedError();
+        }
+
+        return ipmi::responseSuccess();
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Failed to set UTC offset to zero: " << e.what()
+                  << std::endl;
+        return ipmi::responseUnspecifiedError();
+    }
+}
+
 /** @brief implements the set SEL time command
  *  @param selDeviceTime - epoch time
  *        -local time as the number of seconds from 00:00:00, January 1, 1970
@@ -623,6 +657,14 @@ ipmi::RspType<> ipmiStorageSetSelTime(uint32_t selDeviceTime)
 
         method.append(TIME_INTERFACE, PROPERTY_ELAPSED, value);
         auto reply = bus.call(method);
+        // Resetting the SELTimeUTCOffset to default value
+        auto resp = resetSelUtcOffsetToUTC(0);
+        if (resp != ipmi::responseSuccess())
+        {
+            lg2::error("Failed to reset SEL UTC offset to UTC");
+            return ipmi::responseUnspecifiedError();
+        }
+        SelTimeUnspecifiedState = true;
     }
     catch (const InternalFailure& e)
     {
@@ -644,18 +686,51 @@ ipmi::RspType<> ipmiStorageSetSelTime(uint32_t selDeviceTime)
  */
 ipmi::RspType<int16_t> ipmiStorageGetSelTimeUtcOffset()
 {
-    time_t timep;
-    struct tm* gmTime;
-    struct tm* localTime;
+    try
+    {
+        time_t timep;
+        struct tm* gmTime;
+        struct tm* localTime;
 
-    time(&timep);
-    localTime = localtime(&timep);
-    auto validLocalTime = mktime(localTime);
-    gmTime = gmtime(&timep);
-    auto validGmTime = mktime(gmTime);
-    auto timeEquation = (validLocalTime - validGmTime) / 60;
+        time(&timep);
+        localTime = localtime(&timep);
+        auto validLocalTime = mktime(localTime);
+        gmTime = gmtime(&timep);
+        auto validGmTime = mktime(gmTime);
+        auto timeEquation = (validLocalTime - validGmTime) / 60;
 
-    return ipmi::responseSuccess(timeEquation);
+        sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
+        std::string currentTimezone = std::get<std::string>(
+            ipmi::getDbusProperty(bus, "org.freedesktop.timedate1",
+                                  "/org/freedesktop/timedate1",
+                                  "org.freedesktop.timedate1", "Timezone"));
+
+        bool offsetManuallySet = false;
+        if (currentTimezone == "Etc/GMT" && timeEquation == 0)
+        {
+            offsetManuallySet = true;
+        }
+        else if (currentTimezone.rfind("Etc/GMT", 0) == 0 && timeEquation != 0)
+        {
+            offsetManuallySet = true;
+        }
+
+        if (SelTimeUnspecifiedState && offsetManuallySet)
+        {
+            SelTimeUnspecifiedState = false;
+        }
+
+        if (SelTimeUnspecifiedState)
+        {
+            return ipmi::responseSuccess(0x07FF);
+        }
+        return ipmi::responseSuccess(timeEquation);
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("exception message: {ERROR}", "ERROR", e);
+        return ipmi::responseUnspecifiedError();
+    }
 }
 
 /** @brief implements the reserve SEL command
