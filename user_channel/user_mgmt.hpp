@@ -53,7 +53,8 @@ enum class UserUpdateEvent
     userPrivUpdated,
     userStateUpdated,
     userChannelAccessUpdated,
-    userSnmpUpdated
+    userSnmpUpdated,
+    smtpMailAddressUpdated
 };
 
 /** @struct UserPrivAccess
@@ -75,6 +76,7 @@ struct UserPrivAccess
 struct UserInfo
 {
     uint8_t userName[ipmiMaxUserName];
+    uint8_t userMailId[maxIpmiSmtpMailSize];
     UserPrivAccess userPrivAccess[ipmiMaxChannels];
     bool userEnabled;
     bool userInSystem;
@@ -354,14 +356,15 @@ class UserAccess
      *  @param[out] usrEnabled - enabled state of the user.
      *  @param[out] userChannelAccess - ChannelAccess of the user
      *  @param[out] snmpAccess - SNMP state of the user.
+     *  @param[out] smtpMailAddress - SMTP Maild id for the user.
      *
      *  @return 0 for success, -errno for failure.
      */
-    void getUserProperties(const DbusUserObjProperties& properties,
-                           std::vector<std::string>& usrGrps,
-                           std::vector<std::string>& usrPriv,
-                           std::vector<uint8_t>& userChannelAccess,
-                           bool& usrEnabled, bool& snmpAccess);
+    void getUserProperties(
+        const DbusUserObjProperties& properties,
+        std::vector<std::string>& usrGrps, std::vector<std::string>& usrPriv,
+        std::vector<uint8_t>& userChannelAccess, bool& usrEnabled,
+        bool& snmpAccess, std::string smtpMailAddress);
 
     /** @brief provides user details from D-Bus user object data
      *
@@ -371,14 +374,15 @@ class UserAccess
      *  @param[out] usrEnabled - enabled state of the user.
      *  @param[out] userChannelAccess - ChannelAccess of the user
      *  @param[out] snmpAccess - SNMP state of the user.
+     *  @param[out] smtpMailAddress - SMTP Maild id for the user.
      *
      *  @return 0 for success, -errno for failure.
      */
-    int getUserObjProperties(const DbusUserObjValue& userObjs,
-                             std::vector<std::string>& usrGrps,
-                             std::vector<std::string>& usrPriv,
-                             std::vector<uint8_t>& userChannelAccess,
-                             bool& usrEnabled, bool& snmpAccess);
+    int getUserObjProperties(
+        const DbusUserObjValue& userObjs, std::vector<std::string>& usrGrps,
+        std::vector<std::string>& usrPriv,
+        std::vector<uint8_t>& userChannelAccess, bool& usrEnabled,
+        bool& snmpAccess, std::string smtpMailAddress);
 
     /** @brief function to add user entry information to the configuration
      *
@@ -387,13 +391,15 @@ class UserAccess
      *  @param[in] enabled - enabled state of the user
      *  @param[in] userChannelAccess - ChannelAccess of the user
      *  @param[in] snmpAccess - SNMP  state of the user
+     *  @param[in] smtpMailAddress - SMTP Maild id for the user.
      *
      *  @return true for success, false for failure
      */
     bool addUserEntry(const std::string& userName,
                       const std::vector<std::string>& priv,
                       const std::vector<uint8_t>& userChannelAccess,
-                      const bool& enabled, const bool& snmpAccess);
+                      const bool& enabled, const bool& snmpAccess,
+                      std::string smtpMailAddress);
 
     /** @brief function to delete user entry based on user index
      *

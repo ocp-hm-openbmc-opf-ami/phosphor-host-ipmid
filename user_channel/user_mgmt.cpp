@@ -109,6 +109,7 @@ static constexpr const char* userGrpProperty = "UserGroups";
 static constexpr const char* userEnabledProperty = "UserEnabled";
 static constexpr const char* userChannelAccessProperty = "UserChannelAccess";
 static constexpr const char* userSnmpProperty = "SNMPAccessEnableStatus";
+static constexpr const char* smtpMailAddressProperty = "SMTPMailID";
 // OEM Privilege
 static constexpr const char* mediaGroup = "media";
 // SNMP Trap V3
@@ -222,11 +223,12 @@ int getUserNameFromPath(const std::string& path, std::string& userName)
     return 0;
 }
 
-void userUpdateHelper(
-    UserAccess& usrAccess, const UserUpdateEvent& userEvent,
-    const std::string& userName, const std::vector<std::string> priv,
-    const bool& enabled, const std::string& newUserName,
-    std::vector<uint8_t> userChannelAccess, const bool& snmpAccess)
+void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
+                      const std::string& userName,
+                      const std::vector<std::string> priv, const bool& enabled,
+                      const std::string& newUserName,
+                      std::vector<uint8_t> userChannelAccess,
+                      const bool& snmpAccess, const std::string& smtpMailID)
 {
     std::vector<uint8_t> availableChannels = usrAccess.getAvailableChannels();
 
@@ -234,7 +236,7 @@ void userUpdateHelper(
     if (userEvent == UserUpdateEvent::userCreated)
     {
         if (usrAccess.addUserEntry(userName, priv, userChannelAccess, enabled,
-                                   snmpAccess) == false)
+                                   snmpAccess, smtpMailID) == false)
         {
             return;
         }
@@ -302,6 +304,16 @@ void userUpdateHelper(
                 userData->user[usrIndex].userEnabled = enabled;
                 break;
             }
+            case UserUpdateEvent::smtpMailAddressUpdated:
+            {
+                std::memset(userData->user[usrIndex].userMailId, 0,
+                            sizeof(userData->user[usrIndex].userMailId));
+                std::memcpy(
+                    userData->user[usrIndex].userMailId, smtpMailID.c_str(),
+                    std::min(smtpMailID.size(),
+                             sizeof(userData->user[usrIndex].userMailId)));
+                break;
+            }
             case UserUpdateEvent::userChannelAccessUpdated:
             {
                 size_t i;
@@ -351,7 +363,7 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
 {
     static sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
     std::string signal = msg.get_member();
-    std::string userName, newUserName;
+    std::string userName, newUserName, smtpMailAddress;
     std::vector<std::string> groups;
     std::vector<std::string> priv;
     std::vector<uint8_t> userChannelAccessVal;
@@ -366,7 +378,7 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
         getUserNameFromPath(objPath.str, userName);
         if (usrAccess.getUserObjProperties(objValue, groups, priv,
                                            userChannelAccessVal, enabled,
-                                           snmpAccess) != 0)
+                                           snmpAccess, smtpMailAddress) != 0)
         {
             return;
         }
@@ -441,6 +453,11 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                     std::get<std::vector<uint8_t>>(prop.second);
                 userEvent = UserUpdateEvent::userChannelAccessUpdated;
             }
+            else if (member == smtpMailAddressProperty)
+            {
+                userEvent = UserUpdateEvent::smtpMailAddressUpdated;
+                smtpMailAddress = std::get<std::string>(prop.second);
+            }
             else if (member == userSnmpProperty)
             {
                 snmpAccess = std::get<bool>(prop.second);
@@ -455,7 +472,8 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                     // remove user from ipmi user list.
                     userUpdateHelper(usrAccess, UserUpdateEvent::userDeleted,
                                      userName, priv, enabled, newUserName,
-                                     userChannelAccessVal, snmpAccess);
+                                     userChannelAccessVal, snmpAccess,
+                                     smtpMailAddress);
                 }
                 else
                 {
@@ -478,24 +496,27 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                     }
                     usrAccess.getUserProperties(properties, groups, priv,
                                                 userChannelAccessVal, enabled,
-                                                snmpAccess);
+                                                snmpAccess, smtpMailAddress);
                     // add user to ipmi user list.
                     userUpdateHelper(usrAccess, UserUpdateEvent::userCreated,
                                      userName, priv, enabled, newUserName,
-                                     userChannelAccessVal, snmpAccess);
+                                     userChannelAccessVal, snmpAccess,
+                                     smtpMailAddress);
                 }
             }
             else if (userEvent != UserUpdateEvent::reservedEvent)
             {
                 userUpdateHelper(usrAccess, userEvent, userName, priv, enabled,
-                                 newUserName, userChannelAccessVal, snmpAccess);
+                                 newUserName, userChannelAccessVal, snmpAccess,
+                                 smtpMailAddress);
             }
         }
     }
     else if (userEvent != UserUpdateEvent::reservedEvent)
     {
         userUpdateHelper(usrAccess, userEvent, userName, priv, enabled,
-                         newUserName, userChannelAccessVal, snmpAccess);
+                         newUserName, userChannelAccessVal, snmpAccess,
+                         smtpMailAddress);
     }
     return;
 }
@@ -1334,6 +1355,7 @@ static constexpr const char* jsonUserEnabled = "user_enabled";
 static constexpr const char* jsonUserSnmpAccess = "snmp_access";
 static constexpr const char* jsonUserInSys = "user_in_system";
 static constexpr const char* jsonFixedUser = "fixed_user_name";
+static constexpr const char* jsonUserSMTPMailId = "fixed_smtp_mail_id";
 static constexpr const char* payloadEnabledStr = "payload_enabled";
 static constexpr const char* stdPayloadStr = "std_payload";
 static constexpr const char* oemPayloadStr = "OEM_payload";
@@ -1460,9 +1482,17 @@ void UserAccess::readUserData()
                 "Corrupted IPMI user data file - invalid user info");
         }
         std::string userName = userInfo[jsonUserName].get<std::string>();
+        std::string userMailId =
+            userInfo[jsonUserSMTPMailId].get<std::string>();
         std::memset(usersTbl.user[usrIndex].userName, 0, ipmiMaxUserName);
         std::memcpy(reinterpret_cast<char*>(usersTbl.user[usrIndex].userName),
                     userName.c_str(), ipmiMaxUserName);
+
+        std::memset(usersTbl.user[usrIndex].userMailId, 0,
+                    sizeof(usersTbl.user[usrIndex].userMailId));
+        std::memcpy(usersTbl.user[usrIndex].userMailId, userMailId.c_str(),
+                    std::min(userMailId.size(),
+                             sizeof(usersTbl.user[usrIndex].userMailId) - 1));
 
         std::vector<std::string> privilege =
             userInfo[jsonPriv].get<std::vector<std::string>>();
@@ -1595,6 +1625,8 @@ void UserAccess::writeUserData()
         jsonUserInfo[jsonLinkAuthEnabled] = linkAuthEnabled;
         jsonUserInfo[jsonAccCallbk] = accessCallback;
         jsonUserInfo[jsonUserEnabled] = usersTbl.user[usrIndex].userEnabled;
+        jsonUserInfo[jsonUserSMTPMailId] = std::string(
+            reinterpret_cast<const char*>(usersTbl.user[usrIndex].userMailId));
         jsonUserInfo[jsonUserSnmpAccess] = usersTbl.user[usrIndex].snmpAccess;
         jsonUserInfo[jsonUserInSys] = usersTbl.user[usrIndex].userInSystem;
         jsonUserInfo[jsonFixedUser] = usersTbl.user[usrIndex].fixedUserName;
@@ -1641,10 +1673,10 @@ void UserAccess::writeUserData()
     return;
 }
 
-bool UserAccess::addUserEntry(const std::string& userName,
-                              const std::vector<std::string>& sysPriv,
-                              const std::vector<uint8_t>& userChannelAccess,
-                              const bool& enabled, const bool& snmpAccess)
+bool UserAccess::addUserEntry(
+    const std::string& userName, const std::vector<std::string>& sysPriv,
+    const std::vector<uint8_t>& userChannelAccess, const bool& enabled,
+    const bool& snmpAccess, std::string smtpMailAddress)
 {
     bool updateRequired = true;
     UsersTbl* userData = getUsersTblPtr();
@@ -1731,6 +1763,9 @@ bool UserAccess::addUserEntry(const std::string& userName,
     userData->user[freeIndex].userInSystem = true;
     userData->user[freeIndex].userEnabled = enabled;
     userData->user[freeIndex].snmpAccess = snmpAccess;
+    std::strncpy(reinterpret_cast<char*>(userData->user[freeIndex].userMailId),
+                 smtpMailAddress.c_str(),
+                 sizeof(userData->user[freeIndex].userMailId));
 
     return true;
 }
@@ -1763,6 +1798,8 @@ void UserAccess::deleteUserIndex(const size_t& usrIdx)
     userData->user[usrIdx].userInSystem = false;
     userData->user[usrIdx].userEnabled = false;
     userData->user[usrIdx].snmpAccess = false;
+    std::memset(userData->user[usrIdx].userMailId, 0,
+                sizeof(userData->user[usrIdx].userMailId));
     return;
 }
 
@@ -1837,7 +1874,7 @@ void UserAccess::getUserProperties(
     const DbusUserObjProperties& properties, std::vector<std::string>& usrGrps,
     std::vector<std::string>& usrPriv,
     std::vector<uint8_t>& userChannelAccessVal, bool& usrEnabled,
-    bool& snmpAccess)
+    bool& snmpAccess, std::string smtpMailAddress)
 {
     for (const auto& t : properties)
     {
@@ -1858,6 +1895,10 @@ void UserAccess::getUserProperties(
         {
             userChannelAccessVal = std::get<std::vector<uint8_t>>(t.second);
         }
+        else if (key == smtpMailAddressProperty)
+        {
+            smtpMailAddress = std::get<std::string>(t.second);
+        }
         else if (key == userSnmpProperty)
         {
             snmpAccess = std::get<bool>(t.second);
@@ -1869,13 +1910,13 @@ void UserAccess::getUserProperties(
 int UserAccess::getUserObjProperties(
     const DbusUserObjValue& userObjs, std::vector<std::string>& usrGrps,
     std::vector<std::string>& usrPriv, std::vector<uint8_t>& userChannelAccess,
-    bool& usrEnabled, bool& snmpAccess)
+    bool& usrEnabled, bool& snmpAccess, std::string smtpMailAddress)
 {
     auto usrObj = userObjs.find(usersInterface);
     if (usrObj != userObjs.end())
     {
         getUserProperties(usrObj->second, usrGrps, usrPriv, userChannelAccess,
-                          usrEnabled, snmpAccess);
+                          usrEnabled, snmpAccess, smtpMailAddress);
         return 0;
     }
     return -EIO;
@@ -1981,6 +2022,7 @@ void UserAccess::cacheUserDataFile()
         {
             std::vector<std::string> usrGrps;
             std::vector<std::string> usrPriv;
+            std::string smtpMailAddress;
             std::vector<uint8_t> userChannelAccessVal;
 
             std::string userName(
@@ -1999,7 +2041,7 @@ void UserAccess::cacheUserDataFile()
                 // User exist. Lets check and update other fileds
                 getUserObjProperties(usrObj->second, usrGrps, usrPriv,
                                      userChannelAccessVal, usrEnabled,
-                                     snmpAccess);
+                                     snmpAccess, smtpMailAddress);
                 if (std::find(usrGrps.begin(), usrGrps.end(), ipmiGrpName) ==
                     usrGrps.end())
                 {
@@ -2060,7 +2102,7 @@ void UserAccess::cacheUserDataFile()
     for (const auto& usrObj : managedObjs)
     {
         std::vector<std::string> usrGrps, usrPriv;
-        std::string userName;
+        std::string userName, smtpMailAddress;
         std::vector<uint8_t> userChannelAccess;
         bool usrEnabled = false;
         bool snmpAccess = false;
@@ -2071,7 +2113,7 @@ void UserAccess::cacheUserDataFile()
             continue;
         }
         getUserObjProperties(usrObj.second, usrGrps, usrPriv, userChannelAccess,
-                             usrEnabled, snmpAccess);
+                             usrEnabled, snmpAccess, smtpMailAddress);
         // Add 'ipmi' group users
         if (std::find(usrGrps.begin(), usrGrps.end(), ipmiGrpName) !=
             usrGrps.end())
@@ -2079,7 +2121,7 @@ void UserAccess::cacheUserDataFile()
             updateRequired = true;
             // CREATE NEW USER
             if (true != addUserEntry(userName, usrPriv, userChannelAccess,
-                                     usrEnabled, snmpAccess))
+                                     usrEnabled, snmpAccess, smtpMailAddress))
             {
                 break;
             }

@@ -43,6 +43,7 @@ static constexpr uint8_t ipmiMaxUsers = 15;
 static constexpr uint8_t ipmiMaxChannels = 16;
 static constexpr uint8_t maxIpmi20PasswordSize = 20;
 static constexpr uint8_t maxIpmi15PasswordSize = 16;
+static constexpr uint8_t maxIpmiSmtpMailSize = 64;
 static constexpr uint8_t payloadsPerByte = 8;
 
 /** @struct PrivAccess
