@@ -149,7 +149,7 @@ crypto = dependency('libcrypto', version : '>=1.0.2g')
 pam = cpp.find_library('pam', required: true)
 sdbusplus_dep = dependency('sdbusplus')
 stdplus_dep = dependency('stdplus')
-
+pdkhook_deps = [ declare_dependency (link_args: '-lpdkhook'),]
 nlohmann_json_dep = dependency('nlohmann_json', include_type: 'system')
 
 generated_src = []
@@ -278,7 +278,7 @@ libipmi20_src = [
 ipmi20_lib = library(
   'ipmi20',
   libipmi20_src,
-  dependencies: [ipmid_pre, nlohmann_json_dep],
+  dependencies: [ipmid_pre, nlohmann_json_dep, pdkhook_deps],
   include_directories: root_inc,
   install: true,
   install_dir: get_option('libdir') / 'ipmid-providers',

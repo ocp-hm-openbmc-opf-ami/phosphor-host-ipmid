@@ -1,5 +1,6 @@
 #include "globalhandler.hpp"
 
+#include <PDKHooks.hpp>
 #include <ipmid/api.hpp>
 #include <ipmid/utils.hpp>
 #include <phosphor-logging/lg2.hpp>
@@ -46,6 +47,7 @@ void resetBMC()
  */
 ipmi::RspType<> ipmiColdReset()
 {
+    PDK_BMCColdReset();
     try
     {
         resetBMC();
@@ -101,6 +103,7 @@ void warmResetBMC()
  */
 ipmi::RspType<> ipmiWarmReset()
 {
+    PDK_BMCWarmReset();
     try
     {
         if (!reset_queued.test_and_set())
