@@ -1665,9 +1665,17 @@ void UserAccess::writeUserData()
         lg2::error("Error in renaming temporary IPMI user data file");
         throw std::runtime_error("Error in renaming IPMI user data file");
     }
-    std::filesystem::copy_file(
-        ipmiUserDataFile, ipmiUserDataBackupFile,
-        std::filesystem::copy_options::overwrite_existing);
+    if (!(jsonUsersTbl.size() > 0 &&
+          jsonUsersTbl[0][jsonUserName].get<std::string>().empty()))
+    {
+        std::filesystem::copy_file(
+            ipmiUserDataFile, ipmiUserDataBackupFile,
+            std::filesystem::copy_options::overwrite_existing);
+    }
+    else
+    {
+        lg2::error("Skipping backup: first user_name is empty, no valid users");
+    }
     // Update the timestamp
     fileLastUpdatedTime = getUpdatedFileTime();
     return;
