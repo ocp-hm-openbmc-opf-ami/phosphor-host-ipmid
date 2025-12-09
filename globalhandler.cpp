@@ -106,13 +106,22 @@ ipmi::RspType<> ipmiWarmReset()
     PDK_BMCWarmReset();
     try
     {
-        if (!reset_queued.test_and_set())
+        if (reset_queued.test_and_set())
         {
-            // Do this asynchronously so that we can properly return this
-            // command.
-            std::thread t(warmResetBMC);
-            t.detach();
+            return ipmi::responseCommandNotAvailable();
         }
+        std::thread([]() {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            try
+            {
+                warmResetBMC();
+            }
+            catch (const std::exception& ex)
+            {
+                log<level::ERR>(ex.what());
+                reset_queued.clear();
+            }
+        }).detach();
     }
     catch (std::exception& e)
     {
