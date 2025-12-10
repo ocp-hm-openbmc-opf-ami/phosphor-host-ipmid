@@ -1690,7 +1690,7 @@ bool UserAccess::addUserEntry(
     UsersTbl* userData = getUsersTblPtr();
     std::vector<uint8_t> availableChannels = UserAccess::getAvailableChannels();
     size_t freeIndex = 0xFF;
-    uint8_t priv;
+    uint8_t priv = std::numeric_limits<uint8_t>::max();
     // user index 0 is reserved, starts with 1
     for (size_t usrIndex = 1; usrIndex <= ipmiMaxUsers; ++usrIndex)
     {
@@ -1771,9 +1771,19 @@ bool UserAccess::addUserEntry(
     userData->user[freeIndex].userInSystem = true;
     userData->user[freeIndex].userEnabled = enabled;
     userData->user[freeIndex].snmpAccess = snmpAccess;
-    std::strncpy(reinterpret_cast<char*>(userData->user[freeIndex].userMailId),
-                 smtpMailAddress.c_str(),
-                 sizeof(userData->user[freeIndex].userMailId));
+    int ret = std::snprintf(
+        reinterpret_cast<char*>(userData->user[freeIndex].userMailId),
+        sizeof(userData->user[freeIndex].userMailId), "%s",
+        smtpMailAddress.c_str());
+    if (ret < 0 ||
+        ret >= static_cast<int>(sizeof(userData->user[freeIndex].userMailId)))
+    {
+        lg2::debug("Buffer overflow or snprintf failure for user {USER_NAME}, "
+                   "buffer size={BUF_SIZE}, snprintf return={RET_VAL}",
+                   "USER_NAME", userName, "BUF_SIZE",
+                   sizeof(userData->user[freeIndex].userMailId), "RET_VAL",
+                   ret);
+    }
 
     return true;
 }
