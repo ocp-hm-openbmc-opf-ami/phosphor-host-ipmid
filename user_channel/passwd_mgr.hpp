@@ -23,6 +23,23 @@
 #include <unordered_map>
 #include <vector>
 
+/*
+ * Meta data struct for encrypted password file
+ */
+struct MetaPassStruct
+{
+    char signature[10];
+    unsigned char reseved[2];
+    size_t hashSize;
+    size_t ivSize;
+    size_t dataSize;
+    size_t padSize;
+    size_t macSize;
+};
+
+#define FILE_VALIDATION_SUCCESS 0
+#define PASS_FILE_VALIDATION_FAILURE -1
+
 namespace ipmi
 {
 
@@ -128,6 +145,14 @@ class PasswdMgr
      * @return timestamp or -1 for error.
      */
     std::time_t getUpdatedFileTime();
+
+    /** @brief  returns valid status of /etc/ipmi_pass file.
+     *
+     * @param[in] fileSize of the /etc/ipmi_pass file
+     * @param[in] sturcture which holds /etc/ipmi_pass file data
+     * @return 0 for vaild and negative value on failure.
+     */
+    int isValidipmiPassFile(size_t fileSize, MetaPassStruct* metaData);
 };
 
 } // namespace ipmi

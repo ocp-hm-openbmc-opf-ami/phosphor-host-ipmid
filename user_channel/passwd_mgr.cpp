@@ -45,20 +45,6 @@ constexpr mode_t modeMask =
 
 #define META_PASSWD_SIG "=OPENBMC="
 
-/*
- * Meta data struct for encrypted password file
- */
-struct MetaPassStruct
-{
-    char signature[10];
-    unsigned char reseved[2];
-    size_t hashSize;
-    size_t ivSize;
-    size_t dataSize;
-    size_t padSize;
-    size_t macSize;
-};
-
 PasswdMgr::PasswdMgr()
 {
     restrictFilesPermission();
@@ -313,7 +299,11 @@ int PasswdMgr::readPasswdFileData(SecureString& outBytes)
         lg2::debug("Error signature mismatch in password file");
         return -EBADMSG;
     }
-
+    if (isValidipmiPassFile(fileSize, metaData) != 0)
+    {
+        lg2::debug("password file correupted");
+        return -EBADMSG;
+    }
     size_t inBytesLen = metaData->dataSize + metaData->padSize;
     // If data is empty i.e no password map then return success
     if (inBytesLen == 0)
@@ -600,4 +590,48 @@ std::time_t PasswdMgr::getUpdatedFileTime()
     return fileStat.st_mtime;
 }
 
+int PasswdMgr::isValidipmiPassFile(size_t fileSize, MetaPassStruct* metaData)
+{
+    size_t totalSize = sizeof(MetaPassStruct);
+    size_t metaDataSizes = metaData->hashSize + metaData->ivSize;
+    if (metaDataSizes < metaData->hashSize)
+    {
+        return PASS_FILE_VALIDATION_FAILURE;
+    }
+    metaDataSizes += metaData->dataSize;
+    if (metaDataSizes < metaData->dataSize)
+    {
+        return PASS_FILE_VALIDATION_FAILURE;
+    }
+    metaDataSizes += metaData->padSize;
+    if (metaDataSizes < metaData->padSize)
+    {
+        return PASS_FILE_VALIDATION_FAILURE;
+    }
+    metaDataSizes += metaData->macSize;
+    if (metaDataSizes < metaData->macSize)
+    {
+        return PASS_FILE_VALIDATION_FAILURE;
+    }
+    totalSize += metaDataSizes;
+    if (totalSize < metaDataSizes)
+    {
+        return PASS_FILE_VALIDATION_FAILURE;
+    }
+    if (!(fileSize == totalSize))
+    {
+        return PASS_FILE_VALIDATION_FAILURE;
+    }
+
+    if (fileSize ==
+        (sizeof(MetaPassStruct) + metaData->hashSize + metaData->ivSize +
+         metaData->dataSize + metaData->padSize + metaData->macSize))
+    {
+        return FILE_VALIDATION_SUCCESS;
+    }
+    else
+    {
+        return PASS_FILE_VALIDATION_FAILURE;
+    }
+}
 } // namespace ipmi
