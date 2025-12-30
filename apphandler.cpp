@@ -1625,6 +1625,51 @@ static std::string sysInfoReadSystemName()
     return std::string(hostname).substr(0, systemNameMax);
 }
 
+static std::string sysInfoReadSystemFwVersion()
+{
+    // Read the BIOS firmware version from OOB Inventory Config D-Bus
+    // Service:   xyz.openbmc_project.OOBInventoryConfig
+    // Object:    /xyz/openbmc_project/inventory/system/chassis/motherboard/bios
+    // Interface: xyz.openbmc_project.Inventory.Decorator.Revision
+    // Property:  Version (string)
+    try
+    {
+        sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
+
+        constexpr const char* invService =
+            "xyz.openbmc_project.OOBInventoryConfig";
+        constexpr const char* invObject =
+            "/xyz/openbmc_project/inventory/system/chassis/motherboard/bios";
+        constexpr const char* invRevisionIntf =
+            "xyz.openbmc_project.Inventory.Decorator.Revision";
+
+        auto method =
+            bus.new_method_call(invService, invObject, propIntf, "Get");
+        method.append(invRevisionIntf, "Version");
+
+        auto reply = bus.call(method);
+
+        std::variant<std::string> value;
+        reply.read(value);
+
+        std::string version = std::get<std::string>(value);
+
+        if (!version.empty())
+        {
+            return version;
+        }
+        // If property exists but empty, return a descriptive message
+        return std::string{"Error: BIOS Version empty"};
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error("Failed to read OOB Inventory BIOS Version, error: {ERROR}",
+                   "ERROR", e);
+        // Surface an explicit message so callers don't see a blank string
+        return std::string{"Error: BIOS object path not available"};
+    }
+}
+
 static constexpr uint8_t paramRevision = 0x11;
 static constexpr size_t configParameterLength = 16;
 
@@ -1743,6 +1788,8 @@ ipmi::RspType<uint8_t,                // Parameter revision
         sysInfoParamStore = std::make_unique<SysInfoParamStore>();
         sysInfoParamStore->update(IPMI_SYSINFO_SYSTEM_NAME,
                                   sysInfoReadSystemName);
+        sysInfoParamStore->update(IPMI_SYSINFO_SYSTEM_FW_VERSION,
+                                  sysInfoReadSystemFwVersion);
     }
 
     // Parameters other than Set In Progress are assumed to be strings.
