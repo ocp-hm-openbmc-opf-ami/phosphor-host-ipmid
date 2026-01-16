@@ -906,8 +906,31 @@ bool isFRUAccessible()
     }
 }
 
+bool ipmbServiceExists()
+{
+    int rc = std::system("systemctl is-enabled --quiet ipmb.service");
+
+    if (!WIFEXITED(rc))
+    {
+        return false;
+    }
+
+    int status = WEXITSTATUS(rc);
+    // 4 = "not-found" (unit file does not exist). Anything else => unit exists.
+    return status != 4;
+}
+
 bool isIPMBSignalOk()
 {
+    // Check if the ipmbbridged service is present. If not, IPMB is not
+    // supported on this platform, so we can consider the check successful.
+    if (!ipmbServiceExists())
+    {
+        lg2::info(
+            "IPMB not supported, ipmbbridged binary not found. Skipping IPMB selftest");
+        return true;
+    }
+
     sdbusplus::bus::bus bus{ipmid_get_sd_bus_connection()};
 
     auto ipmbCheckCall =
