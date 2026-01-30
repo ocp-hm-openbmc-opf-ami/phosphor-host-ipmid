@@ -15,18 +15,21 @@
  */
 #pragma once
 #include <arpa/inet.h>
-#include <string>
+
 #include <phosphor-logging/lg2.hpp>
 #include <phosphor-logging/log.hpp>
+
+#include <string>
 
 namespace ipmi
 {
 namespace utility
 {
 
-
-namespace ip_address {
-enum class Type {
+namespace ip_address
+{
+enum class Type
+{
     GATEWAY4_ADDRESS,
     GATEWAY6_ADDRESS,
     IP4_ADDRESS,

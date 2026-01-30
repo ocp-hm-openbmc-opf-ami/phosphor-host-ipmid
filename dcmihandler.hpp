@@ -61,20 +61,19 @@ constexpr auto networkdService = "systemd-networkd.service";
  */
 bool isDCMIPowerMgmtSupported();
 
-}// namespace dcmi
+} // namespace dcmi
 
 static constexpr auto hardPowerOff = 0x40;
 static constexpr auto loggingSEL = 0x20;
 static constexpr auto exceptionAction2 =
     0x60; // Enable Hard powerOFF and Logging SEL
-static constexpr auto exceptionActionNon = 0x00; //No exception Action Perform     
+static constexpr auto exceptionActionNon = 0x00; // No exception Action Perform
 static constexpr uint8_t inletTemp1 = 0x37;
 static constexpr uint8_t inletTemp2 = 0x40;
 static constexpr uint8_t entyInstance = 0x01;
 
 /** @brief Restart the systemd unit
-      *  @param[in] unit - systemd unit name which needs to be
-      *                    restarted.
-      */
+ *  @param[in] unit - systemd unit name which needs to be
+ *                    restarted.
+ */
 void restartSystemdUnit(const std::string& unit);
-

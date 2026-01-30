@@ -15,8 +15,9 @@
 */
 
 #pragma once
-#include <cstdint>
 #include <ipmid/api.hpp>
+
+#include <cstdint>
 
 namespace ipmi
 {

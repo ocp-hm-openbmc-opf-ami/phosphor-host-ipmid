@@ -1,12 +1,12 @@
 #pragma once
 
 #include "app/channel.hpp"
+#include "ipmid/net_utility.hpp"
 #include "transportconstants.hpp"
 #include "user_channel/cipher_mgmt.hpp"
 
 #include <ipmid/api-types.hpp>
 #include <ipmid/api.hpp>
-#include "ipmid/net_utility.hpp"
 #include <ipmid/message.hpp>
 #include <ipmid/message/types.hpp>
 #include <ipmid/types.hpp>
@@ -22,10 +22,10 @@
 #include <stdplus/zstring_view.hpp>
 #include <user_channel/channel_layer.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
+#include <xyz/openbmc_project/Network/ARPControl/server.hpp>
 #include <xyz/openbmc_project/Network/EthernetInterface/server.hpp>
 #include <xyz/openbmc_project/Network/IP/server.hpp>
 #include <xyz/openbmc_project/Network/Neighbor/server.hpp>
-#include <xyz/openbmc_project/Network/ARPControl/server.hpp>
 
 #include <cinttypes>
 #include <functional>
@@ -71,8 +71,8 @@ struct ChannelParams
  *  @param[in] channel - The channel id corresponding to an ethernet interface
  *  @return Ethernet interface service and object path if it exists
  */
-std::optional<ChannelParams>
-    maybeGetChannelParams(sdbusplus::bus_t& bus, uint8_t channel);
+std::optional<ChannelParams> maybeGetChannelParams(sdbusplus::bus_t& bus,
+                                                   uint8_t channel);
 
 /** @brief A trivial helper around maybeGetChannelParams() that throws an
  *         exception when it is unable to acquire parameters for the channel.
@@ -255,9 +255,10 @@ class ObjectLookupCache
  */
 template <int family>
 int getIfAddrNum(
-    sdbusplus::bus_t& bus,
-    const ChannelParams& params,
-    const std::unordered_set<sdbusplus::xyz::openbmc_project::Network::server::IP::AddressOrigin>& origins)
+    sdbusplus::bus_t& bus, const ChannelParams& params,
+    const std::unordered_set<
+        sdbusplus::xyz::openbmc_project::Network::server::IP::AddressOrigin>&
+        origins)
 {
     int count = 0;
     ObjectLookupCache ips(bus, params, INTF_IP);
@@ -268,8 +269,9 @@ int getIfAddrNum(
         {
             continue;
         }
-        if ((family == AF_INET6 && addrStr.find(".") != std::string::npos)
-            || (family == AF_INET && addrStr.find(":") != std::string::npos)) {
+        if ((family == AF_INET6 && addrStr.find(".") != std::string::npos) ||
+            (family == AF_INET && addrStr.find(":") != std::string::npos))
+        {
             continue;
         }
 
@@ -330,13 +332,16 @@ std::optional<IfAddr<family>> findIfAddr(
             continue;
         }
 
-        if ( origins == originsV6Static) {
+        if (origins == originsV6Static)
+        {
             const auto& index = std::get<uint8_t>(properties.at("Idx"));
-            if (idx != index) {
+            if (idx != index)
+            {
                 continue;
             } // if
         }
-        else {
+        else
+        {
             if (idx > 0)
             {
                 idx--;
@@ -394,8 +399,8 @@ void reconfigureIfAddr6(sdbusplus::bus_t& bus, const ChannelParams& params,
  *  @return An address representing the gateway address if it exists
  */
 template <int family>
-std::optional<typename AddrFamily<family>::addr>
-    getGatewayProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+std::optional<typename AddrFamily<family>::addr> getGatewayProperty(
+    sdbusplus::bus_t& bus, const ChannelParams& params)
 {
     auto objPath = "/xyz/openbmc_project/network/" + params.ifname;
     auto gatewayStr = std::get<std::string>(
@@ -505,11 +510,12 @@ void setGatewayProperty(sdbusplus::bus_t& bus, const ChannelParams& params,
     }
 }
 
-std::optional<std::string>
-    getLinkLocalProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+std::optional<std::string> getLinkLocalProperty(sdbusplus::bus_t& bus,
+                                                const ChannelParams& params)
 {
     auto objPath = "/xyz/openbmc_project/network/" + params.ifname;
-    auto llStr = std::get<std::string>(getDbusProperty(bus, params.service, objPath, INTF_ETHERNET, propertyLinkLocal));
+    auto llStr = std::get<std::string>(getDbusProperty(
+        bus, params.service, objPath, INTF_ETHERNET, propertyLinkLocal));
     if (llStr.empty())
     {
         return std::nullopt;
@@ -518,38 +524,52 @@ std::optional<std::string>
 }
 
 void setLinkLocalLProperty(sdbusplus::bus_t& bus, const ChannelParams& params,
-                        const sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface::LinkLocalConf ll)
+                           const sdbusplus::xyz::openbmc_project::Network::
+                               server::EthernetInterface::LinkLocalConf ll)
 {
     auto objPath = "/xyz/openbmc_project/network/" + params.ifname;
     std::string llMode;
-    switch (ll) {
-        case sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface::LinkLocalConf::fallback:
-            llMode = "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.fallback";
+    switch (ll)
+    {
+        case sdbusplus::xyz::openbmc_project::Network::server::
+            EthernetInterface::LinkLocalConf::fallback:
+            llMode =
+                "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.fallback";
             break;
-        case sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface::LinkLocalConf::both:
-            llMode = "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.both";
+        case sdbusplus::xyz::openbmc_project::Network::server::
+            EthernetInterface::LinkLocalConf::both:
+            llMode =
+                "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.both";
             break;
-        case sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface::LinkLocalConf::v4:
-            llMode = "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.v4";
+        case sdbusplus::xyz::openbmc_project::Network::server::
+            EthernetInterface::LinkLocalConf::v4:
+            llMode =
+                "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.v4";
             break;
-        case sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface::LinkLocalConf::v6:
-            llMode = "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.v6";
+        case sdbusplus::xyz::openbmc_project::Network::server::
+            EthernetInterface::LinkLocalConf::v6:
+            llMode =
+                "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.v6";
             break;
-        case sdbusplus::xyz::openbmc_project::Network::server::EthernetInterface::LinkLocalConf::none:
-            llMode = "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.none";
+        case sdbusplus::xyz::openbmc_project::Network::server::
+            EthernetInterface::LinkLocalConf::none:
+            llMode =
+                "xyz.openbmc_project.Network.EthernetInterface.LinkLocalConf.none";
             break;
     }
 
-    setDbusProperty(bus, params.service, objPath, INTF_ETHERNET,propertyLinkLocal, llMode);
+    setDbusProperty(bus, params.service, objPath, INTF_ETHERNET,
+                    propertyLinkLocal, llMode);
 }
 
-
 template <int family>
-std::optional<std::string> getIPEnableProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
+std::optional<std::string> getIPEnableProperty(sdbusplus::bus_t& bus,
+                                               const ChannelParams& params)
 {
     auto objPath = "/xyz/openbmc_project/network/" + params.ifname;
-    auto enabledStr = getDbusProperty(bus, params.service, objPath, INTF_ETHERNET,
-                    AddrFamily<family>::propertyIPEnabled);
+    auto enabledStr =
+        getDbusProperty(bus, params.service, objPath, INTF_ETHERNET,
+                        AddrFamily<family>::propertyIPEnabled);
     if (enabledStr.empty())
     {
         return std::nullopt;
@@ -558,11 +578,13 @@ std::optional<std::string> getIPEnableProperty(sdbusplus::bus_t& bus, const Chan
 }
 
 template <int family>
-void setIPEnableProperty(sdbusplus::bus_t& bus, const ChannelParams& params, const bool enabled)
+void setIPEnableProperty(sdbusplus::bus_t& bus, const ChannelParams& params,
+                         const bool enabled)
 {
     auto objPath = "/xyz/openbmc_project/network/" + params.ifname;
     setDbusProperty(bus, params.service, objPath, INTF_ETHERNET,
-                    AddrFamily<family>::propertyIPEnabled, enabled ? "true" : "false");
+                    AddrFamily<family>::propertyIPEnabled,
+                    enabled ? "true" : "false");
 }
 
 } // namespace transport
