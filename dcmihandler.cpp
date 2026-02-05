@@ -696,16 +696,10 @@ ipmi::RspType<uint8_t // new asset tag length
         return ipmi::responseUnspecifiedError();
     }
 
-    std::string& assetTag = assetTagResp.value();
+    std::string assetTag = assetTagResp.value();
+    assetTag.resize(offset + count, ' ');
 
-    if (offset > assetTag.size())
-    {
-        return ipmi::responseParmOutOfRange();
-    }
-
-    // operation is to truncate at offset and append new data
-    assetTag.resize(offset);
-    assetTag.append(data.begin(), data.end());
+    std::copy_n(data.begin(), count, assetTag.begin() + offset);
 
     if (!dcmi::writeAssetTag(ctx, assetTag))
     {
