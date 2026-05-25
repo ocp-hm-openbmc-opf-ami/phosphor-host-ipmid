@@ -1758,6 +1758,117 @@ std::string getBackupGatewayMACAddressProperty(sdbusplus::bus_t& bus,
     return std::get<std::string>(value);
 }
 
+/** @brief Gets the interface name (eth0, eth1, etc.) for a given channel number
+ *
+ *  @param[in] bus      - The bus object used for lookups
+ *  @param[in] channel  - The channel number
+ *  @return interface name (e.g., "eth0", "eth1", etc.)
+ */
+std::string getChannelInterface(sdbusplus::bus_t& bus, uint8_t channel)
+{
+    try
+    {
+        auto method = bus.new_method_call(
+            "xyz.openbmc_project.User.Manager", "/xyz/openbmc_project/user",
+            "xyz.openbmc_project.User.AccountPolicy", "GetChannelInterfaceMap");
+
+        auto reply = bus.call(method);
+
+        // Response format: a{ys} - array of dictionary entries (uint8_t ->
+        // string)
+        std::map<uint8_t, std::string> channelInterfaceMap;
+        reply.read(channelInterfaceMap);
+
+        // Find the interface for the requested channel
+        auto it = channelInterfaceMap.find(channel);
+        if (it != channelInterfaceMap.end())
+        {
+            return it->second;
+        }
+        else
+        {
+            std::cerr << "Channel " << static_cast<int>(channel)
+                      << " not found in channel interface map" << std::endl;
+            return "";
+        }
+    }
+    catch (const sdbusplus::exception_t& e)
+    {
+        std::cerr << "Error getting channel interface: " << e.what()
+                  << std::endl;
+        return "";
+    }
+}
+
+/** @brief Get the D-Bus object path for a channel's PEF Alert Manager interface
+ *
+ * @param[in] bus        - The bus object used for D-Bus calls
+ * @param[in] channel    - The channel number
+ * @return optional containing the object path on success, nullopt on failure
+ */
+std::optional<std::string> getPefObjectPath(sdbusplus::bus_t& bus,
+                                            uint8_t channel)
+{
+    std::string interfaceName = getChannelInterface(bus, channel);
+    if (interfaceName.empty())
+    {
+        std::cerr << "Error: Could not get interface name for channel "
+                  << static_cast<int>(channel) << std::endl;
+        return std::nullopt;
+    }
+
+    return "/xyz/openbmc_project/network/" + interfaceName;
+}
+
+/** @brief Get a D-Bus property value
+ *
+ * @param[in] bus            - The bus object used for D-Bus calls
+ * @param[in] service        - The D-Bus service name
+ * @param[in] objectPath     - The D-Bus object path
+ * @param[in] interface      - The D-Bus interface name
+ * @param[in] property       - The property name
+ * @return variant containing the property value
+ * @throws sdbusplus::exception_t on error
+ */
+template <typename T>
+T getPefProperty(sdbusplus::bus_t& bus, const std::string& objectPath,
+                 const std::string& property)
+{
+    auto method = bus.new_method_call("xyz.openbmc_project.pef.alert.manager",
+                                      objectPath.c_str(),
+                                      "org.freedesktop.DBus.Properties", "Get");
+
+    method.append("xyz.openbmc_project.pef.LanParamConfig", property);
+
+    auto reply = bus.call(method);
+    std::variant<T> value;
+    reply.read(value);
+
+    return std::get<T>(value);
+}
+
+/** @brief Set a D-Bus property value
+ *
+ * @param[in] bus            - The bus object used for D-Bus calls
+ * @param[in] objectPath     - The D-Bus object path
+ * @param[in] property       - The property name
+ * @param[in] value          - The value to set
+ * @throws sdbusplus::exception_t on error
+ */
+template <typename T>
+void setPefProperty(sdbusplus::bus_t& bus, const std::string& objectPath,
+                    const std::string& property, const T& value)
+{
+    auto method = bus.new_method_call("xyz.openbmc_project.pef.alert.manager",
+                                      objectPath.c_str(),
+                                      "org.freedesktop.DBus.Properties", "Set");
+
+    method.append("xyz.openbmc_project.pef.LanParamConfig", property,
+                  std::variant<T>(value));
+
+    bus.call(method);
+}
+
 /** @brief set the value for Number of destinations to Dbus.
  *
  * @param[in] bus        - The bus object used for lookups
@@ -2132,61 +2243,110 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             return response(ipmiCCWriteReadParameter);
         }
         case LanParam::CommunityString:
-        {
+        {            
             std::vector<uint8_t> data;
             req.unpack(data);
-
+ 
             if (data.size() != Max_Communitystr_Length)
             {
                 return responseInvalidFieldRequest();
             }
-
+ 
             try
             {
                 sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
-
-                ManagedObjectsMap managedObjects = getManagedObjects(bus);
-
-                std::string communityString;
-                bool userExists = false;
-                for (const auto& obj : managedObjects)
+ 
+                // Get the PEF object path for this channel
+                auto objPath = getPefObjectPath(bus, channel);
+                if (!objPath)
                 {
-                    if (obj.first.str.find(
-                            "/xyz/openbmc_project/snmp/CommunityStrManager/") !=
-                        std::string::npos)
+                    return responseUnspecifiedError();
+                }
+ 
+                // Convert data to string (strip trailing NUL padding used
+                // by IPMI 18-byte fixed-length field).
+                std::string communityString(data.begin(), data.end());
+                communityString.erase(std::find(communityString.begin(),
+                                                communityString.end(), '\0'),
+                                      communityString.end());
+ 
+                // Verify that the requested community string has been
+                // pre-configured under
+                // /xyz/openbmc_project/snmp/CommunityStrManager/<name>.
+                //
+                // NOTE: Do NOT use org.freedesktop.DBus.Introspectable.
+                // Introspect for this check - sd-bus returns a successful
+                // empty <node/> reply for any path (existing or not), so
+                // it never throws and is useless as an existence probe.
+                //
+                // Instead, read the CommunityString property on the
+                // candidate path through the typed
+                // xyz.openbmc_project.Snmp.CommunityStrManager interface.
+                // If the path or interface is not registered, sd-bus
+                // throws org.freedesktop.DBus.Error.UnknownObject /
+                // UnknownInterface immediately, which is the unambiguous
+                // signal that the community is not configured.
+                {
+                    const std::string communityPath =
+                        std::string(::objPath) + "/" + communityString;
+                    try
                     {
-                        userExists = true;
-                        break;
+                        auto probe = bus.new_method_call(
+                            ::service, communityPath.c_str(),
+                            "org.freedesktop.DBus.Properties", "Get");
+                        probe.append(
+                            "xyz.openbmc_project.Snmp.CommunityStrManager",
+                            "CommunityString");
+                        // 500 ms timeout (microseconds) so a stuck SNMP
+                        // service cannot hold up the IPMI handler. A
+                        // healthy snmp-agent replies in milliseconds; this
+                        // value is an upper bound, not a fixed delay.
+                        bus.call(probe, 500000);
+                    }
+                    catch (const sdbusplus::exception_t& e)
+                    {
+                        log<level::ERR>(
+                            "CommunityString not configured in "
+                            "CommunityStrManager",
+                            entry("COMMUNITY=%s", communityString.c_str()),
+                            entry("name=%s", e.name()),
+                            entry("what=%s", e.what()));
+                        return responseInvalidFieldRequest();
                     }
                 }
-                if (userExists)
-                {
-                    communityString = std::string(data.begin(), data.end());
-                }
-                else
-                {
-                    return responseUnspecifiedError();
-                }
-                try
-                {
-                    setDbusProperty(bus, netService, lanObjPath, INTF_ETHERNET,
-                                    communityProp, communityString);
-
-                    updateJsonFile(configFilePath, communityString);
-                }
-                catch (const std::exception& e)
-                {
-                    return responseUnspecifiedError();
-                }
+ 
+                // Persist the community string on the per-interface
+                // phosphor-networkd object. The property is exposed as
+                // SNMPCommunityString on
+                // xyz.openbmc_project.Network.EthernetInterface at
+                // service xyz.openbmc_project.Network, path
+                // /xyz/openbmc_project/network/<iface>. (The previous
+                // attempt to write via xyz.openbmc_project.pef.alert.manager
+                // /xyz/openbmc_project/pef/LanParamConfig failed with
+                // UnknownObject because that service does not own this
+                // path on this build.)
+                setDbusProperty(bus, netService, *objPath, INTF_ETHERNET,
+                                "SNMPCommunityString", communityString);
             }
-            catch (const sdbusplus::exception::SdBusError& e)
+            catch (const sdbusplus::exception_t& e)
             {
                 log<level::ERR>("error in setCommunityString property",
                                 entry("name=%s", e.name()),
                                 entry("what=%s", e.what()));
-                elog<InternalFailure>();
+                // Map "Invalid argument" from pef.alert.manager (e.g. the
+                // community string is not configured in
+                // CommunityStrManager) to the IPMI "invalid field" code so
+                // ipmitool reports a clean error instead of retrying.
+                const std::string name = e.name() ? e.name() : "";
+                if (name == "org.freedesktop.DBus.Error.InvalidArgs" ||
+                    name ==
+                        "xyz.openbmc_project.Common.Error.InvalidArgument")
+                {
+                    return responseInvalidFieldRequest();
+                }
+                return responseUnspecifiedError();
             }
-
+ 
             return responseSuccess();
         }
         case LanParam::NumofDestination:
@@ -3234,17 +3394,24 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             std::vector<uint8_t> comStrData(Max_Communitystr_Length, 0x00);
             try
             {
-                std::ifstream configFile(configFilePath);
-                Json config;
-
-                if (configFile.is_open())
+                // Read the community string from the same D-Bus property
+                // the Set path writes to so ipmitool's Set-then-Get
+                // readback sees the value just written:
+                //   service   : xyz.openbmc_project.Network
+                //   path      : /xyz/openbmc_project/network/<iface>
+                //   interface : xyz.openbmc_project.Network.EthernetInterface
+                //   property  : SNMPCommunityString
+                sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
+                auto path = getPefObjectPath(bus, channel);
+                if (!path)
                 {
-                    configFile >> config;
-                    configFile.close();
+                    return responseUnspecifiedError();
                 }
 
-                std::string communityString =
-                    config["Config"]["CommunityString"].get<std::string>();
+                auto communityString = std::get<std::string>(getDbusProperty(
+                    bus, netService, *path, INTF_ETHERNET,
+                    "SNMPCommunityString"));
+
                 std::copy_n(
                     communityString.begin(),
                     std::min(communityString.size(),
