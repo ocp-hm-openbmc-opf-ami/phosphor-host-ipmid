@@ -62,6 +62,7 @@ static constexpr auto softwareRoot = "/xyz/openbmc_project/software";
 static constexpr const char* configFile = "/var/lib/ipmi/system_info.json";
 static constexpr uint8_t parameteroffset = 3;
 static constexpr uint8_t systemNameMax = 14;
+static constexpr uint8_t systemFwVersionMax = 14;
 
 /* Get Self Test Result dbus sources */
 
@@ -1679,17 +1680,19 @@ static std::string sysInfoReadSystemFwVersion()
 
         if (!version.empty())
         {
-            return version;
+            return version.substr(0, systemFwVersionMax);
         }
         // If property exists but empty, return a descriptive message
-        return std::string{"Error: BIOS Version empty"};
+        return std::string{"Error: BIOS Version empty"}.substr(
+            0, systemFwVersionMax);
     }
     catch (const std::exception& e)
     {
         lg2::error("Failed to read OOB Inventory BIOS Version, error: {ERROR}",
                    "ERROR", e);
         // Surface an explicit message so callers don't see a blank string
-        return std::string{"Error: BIOS object path not available"};
+        return std::string{"Error: BIOS object path not available"}.substr(
+            0, systemFwVersionMax);
     }
 }
 
