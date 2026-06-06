@@ -20,21 +20,25 @@
 #include "selutility.hpp"
 
 #include <boost/algorithm/string.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/container/flat_map.hpp>
-#include <boost/process.hpp>
 #include <ipmid/api.hpp>
 #include <ipmid/message.hpp>
 #include <ipmid/types.hpp>
+#include <ipmid/utils.hpp>
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/message/types.hpp>
 #include <sdbusplus/timer.hpp>
+#include <xyz/openbmc_project/ObjectMapper/common.hpp>
 
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
+
+using ObjectMapper = sdbusplus::common::xyz::openbmc_project::ObjectMapper;
 
 static constexpr bool DEBUG = false;
 
@@ -76,15 +80,12 @@ using ObjectType =
     boost::container::flat_map<std::string,
                                boost::container::flat_map<std::string, Value>>;
 using ManagedObjectType =
-    boost::container::flat_map<sdbusplus::message::object_path, ObjectType>;
-using ManagedEntry = std::pair<sdbusplus::message::object_path, ObjectType>;
+    boost::container::flat_map<sdbusplus::object_path, ObjectType>;
+using ManagedEntry = std::pair<sdbusplus::object_path, ObjectType>;
+using Paths = std::vector<std::string>;
 
-constexpr static const char* selLoggerServiceName =
-    "xyz.openbmc_project.Logging.IPMI";
 constexpr static const char* fruDeviceServiceName =
     "xyz.openbmc_project.FruDevice";
-constexpr static const char* entityManagerServiceName =
-    "xyz.openbmc_project.EntityManager";
 constexpr static const size_t writeTimeoutSeconds = 10;
 constexpr static const char* chassisTypeRackMount = "23";
 constexpr static const char* chassisTypeMainServer = "17";
@@ -224,7 +225,7 @@ void replaceCacheFru(
         "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
     if (ec)
     {
-        lg2::error("GetMangagedObjects for replaceCacheFru failed: {ERROR}",
+        lg2::error("GetManagedObjects for replaceCacheFru failed: {ERROR}",
                    "ERROR", ec.message());
 
         return;
@@ -243,20 +244,18 @@ std::pair<ipmi::Cc, std::vector<uint8_t>> getFru(ipmi::Context::ptr ctx,
     auto deviceFind = deviceHashes.find(devId);
     if (deviceFind == deviceHashes.end())
     {
-        return {IPMI_CC_SENSOR_INVALID, {}};
+        return {ipmi::ccSensorInvalid, {}};
     }
 
     cacheBus = deviceFind->second.first;
     cacheAddr = deviceFind->second.second;
 
     boost::system::error_code ec;
+    std::vector<uint8_t> fru = ipmi::callDbusMethod<std::vector<uint8_t>>(
+        ctx, ec, fruDeviceServiceName, "/xyz/openbmc_project/FruDevice",
+        "xyz.openbmc_project.FruDeviceManager", "GetRawFru", cacheBus,
+        cacheAddr);
 
-    std::vector<uint8_t> fru =
-        ctx->bus->yield_method_call<std::vector<uint8_t>>(
-            ctx->yield, ec, fruDeviceServiceName,
-            "/xyz/openbmc_project/FruDevice",
-            "xyz.openbmc_project.FruDeviceManager", "GetRawFru", cacheBus,
-            cacheAddr);
     if (ec)
     {
         lg2::error("Couldn't get raw fru: {ERROR}", "ERROR", ec.message());
@@ -298,7 +297,7 @@ void startMatch(void)
         "type='signal',arg0path='/xyz/openbmc_project/"
         "FruDevice/',member='InterfacesAdded'",
         [](sdbusplus::message_t& message) {
-            sdbusplus::message::object_path path;
+            sdbusplus::object_path path;
             ObjectType object;
             try
             {
@@ -324,7 +323,7 @@ void startMatch(void)
         "type='signal',arg0path='/xyz/openbmc_project/"
         "FruDevice/',member='InterfacesRemoved'",
         [](sdbusplus::message_t& message) {
-            sdbusplus::message::object_path path;
+            sdbusplus::object_path path;
             std::set<std::string> interfaces;
             try
             {
@@ -346,9 +345,12 @@ void startMatch(void)
         });
 
     // call once to populate
-    boost::asio::spawn(*getIoContext(), [](boost::asio::yield_context yield) {
-        replaceCacheFru(getSdBus(), yield);
-    });
+    boost::asio::spawn(
+        *getIoContext(),
+        [](boost::asio::yield_context yield) {
+            replaceCacheFru(getSdBus(), yield);
+        },
+        boost::asio::detached);
 }
 
 /** @brief implements the read FRU data command
@@ -537,18 +539,18 @@ ipmi::RspType<uint16_t, // inventorySize
     return ipmi::responseSuccess(fru.size(), accessType);
 }
 
-ipmi_ret_t getFruSdrCount(ipmi::Context::ptr, size_t& count)
+ipmi::Cc getFruSdrCount(ipmi::Context::ptr, size_t& count)
 {
     count = deviceHashes.size();
-    return IPMI_CC_OK;
+    return ipmi::ccSuccess;
 }
 
-ipmi_ret_t getFruSdrs([[maybe_unused]] ipmi::Context::ptr ctx, size_t index,
-                      get_sdr::SensorDataFruRecord& resp)
+ipmi::Cc getFruSdrs([[maybe_unused]] ipmi::Context::ptr ctx, size_t index,
+                    get_sdr::SensorDataFruRecord& resp)
 {
     if (deviceHashes.size() < index)
     {
-        return IPMI_CC_INVALID_FIELD_REQUEST;
+        return ipmi::ccInvalidFieldRequest;
     }
     auto device = deviceHashes.begin() + index;
     uint16_t& bus = device->second.first;
@@ -584,76 +586,97 @@ ipmi_ret_t getFruSdrs([[maybe_unused]] ipmi::Context::ptr ctx, size_t index,
         });
     if (fru == frus.end())
     {
-        return IPMI_CC_RESPONSE_ERROR;
+        return ipmi::ccResponseError;
     }
     std::string name;
+    uint8_t entityID = 0;
+    uint8_t entityInstance = 0x1;
 
 #ifdef USING_ENTITY_MANAGER_DECORATORS
-
-    boost::container::flat_map<std::string, Value>* entityData = nullptr;
-
-    // todo: this should really use caching, this is a very inefficient lookup
     boost::system::error_code ec;
 
-    ManagedObjectType entities = ctx->bus->yield_method_call<ManagedObjectType>(
-        ctx->yield, ec, entityManagerServiceName,
-        "/xyz/openbmc_project/inventory", "org.freedesktop.DBus.ObjectManager",
-        "GetManagedObjects");
-
+    Paths subtreePaths = ipmi::callDbusMethod<Paths>(
+        ctx, ec, ObjectMapper::default_service, ObjectMapper::instance_path,
+        ObjectMapper::interface, ObjectMapper::method_names::get_sub_tree_paths,
+        "/xyz/openbmc_project/inventory", 0,
+        std::array<const char*, 2>{
+            "xyz.openbmc_project.Inventory.Decorator.I2CDevice",
+            "xyz.openbmc_project.Inventory.Decorator.Ipmi",
+        });
     if (ec)
     {
-        lg2::error("GetMangagedObjects for ipmiStorageGetFruInvAreaInfo "
-                   "failed: {ERROR}",
-                   "ERROR", ec.message());
-
+        lg2::error(
+            "GetSubTreePaths for ipmiStorageGetFruInvAreaInfo failed: {ERROR}",
+            "ERROR", ec.message());
         return ipmi::ccResponseError;
     }
 
-    auto entity = std::find_if(
-        entities.begin(), entities.end(),
-        [bus, address, &entityData, &name](ManagedEntry& entry) {
-            auto findFruDevice = entry.second.find(
-                "xyz.openbmc_project.Inventory.Decorator.I2CDevice");
-            if (findFruDevice == entry.second.end())
+    bool foundDevice = false;
+    for (const auto& path : subtreePaths)
+    {
+        ipmi::PropertyMap i2cProperties;
+        boost::system::error_code ec = ipmi::getAllDbusProperties(
+            ctx, "xyz.openbmc_project.EntityManager", path,
+            "xyz.openbmc_project.Inventory.Decorator.I2CDevice", i2cProperties);
+        if (ec)
+        {
+            continue;
+        }
+
+        std::optional<uint64_t> maybeBus;
+        std::optional<uint64_t> maybeAddress;
+        std::optional<std::string> maybeName;
+        for (const auto& [key, val] : i2cProperties)
+        {
+            if (key == "Bus")
             {
-                return false;
+                maybeBus = std::get<uint64_t>(val);
             }
-
-            // Integer fields added via Entity-Manager json are uint64_ts by
-            // default.
-            auto findBus = findFruDevice->second.find("Bus");
-            auto findAddress = findFruDevice->second.find("Address");
-
-            if (findBus == findFruDevice->second.end() ||
-                findAddress == findFruDevice->second.end())
+            else if (key == "Address")
             {
-                return false;
+                maybeAddress = std::get<uint64_t>(val);
             }
-            if ((std::get<uint64_t>(findBus->second) != bus) ||
-                (std::get<uint64_t>(findAddress->second) != address))
+            else if (key == "Name")
             {
-                return false;
+                maybeName = std::get<std::string>(val);
             }
+        }
+        if (!maybeBus || *maybeBus != bus || !maybeAddress ||
+            *maybeAddress != address)
+        {
+            continue;
+        }
+        // At this point we found the device entry and will populate the
+        // information if exist.
+        foundDevice = true;
 
-            auto fruName = findFruDevice->second.find("Name");
-            if (fruName != findFruDevice->second.end())
+        if (maybeName.has_value())
+        {
+            name = *maybeName;
+        }
+
+        ipmi::PropertyMap entityData;
+        ec = ipmi::getAllDbusProperties(
+            ctx, "xyz.openbmc_project.EntityManager", path,
+            "xyz.openbmc_project.Inventory.Decorator.Ipmi", entityData);
+        if (!ec)
+        {
+            for (const auto& [key, val] : entityData)
             {
-                name = std::get<std::string>(fruName->second);
+                if (key == "EntityId")
+                {
+                    entityID = std::get<uint64_t>(val);
+                }
+                else if (key == "EntityInstance")
+                {
+                    entityInstance = std::get<uint64_t>(val);
+                }
             }
+        }
+        break;
+    }
 
-            // At this point we found the device entry and should return
-            // true.
-            auto findIpmiDevice = entry.second.find(
-                "xyz.openbmc_project.Inventory.Decorator.Ipmi");
-            if (findIpmiDevice != entry.second.end())
-            {
-                entityData = &(findIpmiDevice->second);
-            }
-
-            return true;
-        });
-
-    if (entity == entities.end())
+    if (!foundDevice)
     {
         if constexpr (DEBUG)
         {
@@ -661,11 +684,10 @@ ipmi_ret_t getFruSdrs([[maybe_unused]] ipmi::Context::ptr ctx, size_t index,
                                  "not found for Fru\n");
         }
     }
-
 #endif
 
     std::vector<std::string> nameProperties = {
-        "PRODUCT_PRODUCT_NAME",  "BOARD_PRODUCT_NAME",   "PRODUCT_PART_NUMBER",
+        "BOARD_PRODUCT_NAME",    "PRODUCT_PRODUCT_NAME", "PRODUCT_PART_NUMBER",
         "BOARD_PART_NUMBER",     "PRODUCT_MANUFACTURER", "BOARD_MANUFACTURER",
         "PRODUCT_SERIAL_NUMBER", "BOARD_SERIAL_NUMBER"};
 
@@ -689,11 +711,10 @@ ipmi_ret_t getFruSdrs([[maybe_unused]] ipmi::Context::ptr ctx, size_t index,
     }
     size_t sizeDiff = maxFruSdrNameSize - name.size();
 
-    resp.header.record_id_lsb = 0x0; // calling code is to implement these
-    resp.header.record_id_msb = 0x0;
-    resp.header.sdr_version = ipmiSdrVersion;
-    resp.header.record_type = get_sdr::SENSOR_DATA_FRU_RECORD;
-    resp.header.record_length = sizeof(resp.body) + sizeof(resp.key) - sizeDiff;
+    resp.header.recordId = 0x0; // calling code is to implement these
+    resp.header.sdrVersion = ipmiSdrVersion;
+    resp.header.recordType = get_sdr::SENSOR_DATA_FRU_RECORD;
+    resp.header.recordLength = sizeof(resp.body) + sizeof(resp.key) - sizeDiff;
     resp.key.deviceAddress = 0x20;
     resp.key.fruID = device->first;
     resp.key.accessLun = 0x80; // logical / physical fru device
@@ -702,28 +723,6 @@ ipmi_ret_t getFruSdrs([[maybe_unused]] ipmi::Context::ptr ctx, size_t index,
     resp.body.deviceType = 0x10;
     resp.body.deviceTypeModifier = 0x0;
 
-    uint8_t entityID = 0;
-    uint8_t entityInstance = 0x1;
-
-#ifdef USING_ENTITY_MANAGER_DECORATORS
-    if (entityData)
-    {
-        auto entityIdProperty = entityData->find("EntityId");
-        auto entityInstanceProperty = entityData->find("EntityInstance");
-
-        if (entityIdProperty != entityData->end())
-        {
-            entityID = static_cast<uint8_t>(
-                std::get<uint64_t>(entityIdProperty->second));
-        }
-        if (entityInstanceProperty != entityData->end())
-        {
-            entityInstance = static_cast<uint8_t>(
-                std::get<uint64_t>(entityInstanceProperty->second));
-        }
-    }
-#endif
-
     resp.body.entityID = entityID;
     resp.body.entityInstance = entityInstance;
 
@@ -731,7 +730,7 @@ ipmi_ret_t getFruSdrs([[maybe_unused]] ipmi::Context::ptr ctx, size_t index,
     resp.body.deviceIDLen = ipmi::storage::typeASCIILatin8 | name.size();
     name.copy(resp.body.deviceID, name.size());
 
-    return IPMI_CC_OK;
+    return ipmi::ccSuccess;
 }
 
 static bool getSELLogFiles(std::vector<std::filesystem::path>& selLogFiles)
@@ -742,8 +741,7 @@ static bool getSELLogFiles(std::vector<std::filesystem::path>& selLogFiles)
              dynamic_sensors::ipmi::sel::selLogDir))
     {
         std::string filename = dirEnt.path().filename();
-        if (boost::starts_with(filename,
-                               dynamic_sensors::ipmi::sel::selLogFilename))
+        if (filename.starts_with(dynamic_sensors::ipmi::sel::selLogFilename))
         {
             // If we find an ipmi_sel log file, save the path
             selLogFiles.emplace_back(
@@ -1047,7 +1045,7 @@ ipmi::RspType<uint16_t,                   // Next Record ID
             }
             catch (const std::invalid_argument&)
             {
-                std::cerr << "Invalid Generator ID\n";
+                lg2::error("Invalid Generator ID");
             }
 
             // Get the sensor type, sensor number, and event type for the sensor
@@ -1073,7 +1071,7 @@ ipmi::RspType<uint16_t,                   // Next Record ID
             }
             catch (const std::invalid_argument&)
             {
-                std::cerr << "Invalid Event Direction\n";
+                lg2::error("Invalid Event Direction");
             }
         }
 
@@ -1182,13 +1180,13 @@ ipmi::RspType<uint8_t> ipmiStorageClearSEL(
     // cleared
     cancelSELReservation();
 
-    boost::system::error_code ec;
-    ctx->bus->yield_method_call<>(ctx->yield, ec, selLoggerServiceName,
-                                  "/xyz/openbmc_project/Logging/IPMI",
-                                  "xyz.openbmc_project.Logging.IPMI", "Clear");
+    boost::system::error_code ec =
+        ipmi::callDbusMethod(ctx, "xyz.openbmc_project.Logging.IPMI",
+                             "/xyz/openbmc_project/Logging/IPMI",
+                             "xyz.openbmc_project.Logging.IPMI", "Clear");
     if (ec)
     {
-        std::cerr << "error in clear SEL: " << ec << std::endl;
+        lg2::error("error in clear SEL: {MSG}", "MSG", ec.message());
         return ipmi::responseUnspecifiedError();
     }
 
@@ -1202,17 +1200,17 @@ std::vector<uint8_t> getType8SDRs(
     get_sdr::SensorDataEntityRecord data{};
 
     /* Header */
-    get_sdr::header::set_record_id(recordId, &(data.header));
     // Based on IPMI Spec v2.0 rev 1.1
-    data.header.sdr_version = SDR_VERSION;
-    data.header.record_type = 0x08;
-    data.header.record_length = sizeof(data.key) + sizeof(data.body);
+    data.header.recordId = recordId;
+    data.header.sdrVersion = SDR_VERSION;
+    data.header.recordType = 0x08;
+    data.header.recordLength = sizeof(data.key) + sizeof(data.body);
 
     /* Key */
     data.key.containerEntityId = entity->second.containerEntityId;
     data.key.containerEntityInstance = entity->second.containerEntityInstance;
-    get_sdr::key::set_flags(entity->second.isList, entity->second.isLinked,
-                            &(data.key));
+    get_sdr::key::setFlags(entity->second.isList, entity->second.isLinked,
+                           data.key);
     data.key.entityId1 = entity->second.containedEntities[0].first;
     data.key.entityInstance1 = entity->second.containedEntities[0].second;
 

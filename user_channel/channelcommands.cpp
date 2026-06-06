@@ -14,7 +14,6 @@
 // limitations under the License.
 */
 
-#include "apphandler.hpp"
 #include "channel_layer.hpp"
 
 #include <ipmid/api.hpp>
@@ -24,6 +23,14 @@
 
 namespace ipmi
 {
+
+constexpr Cc ccPayloadTypeNotSupported = 0x80;
+
+static inline auto responsePayloadTypeNotSupported()
+{
+    return response(ccPayloadTypeNotSupported);
+}
+
 /** @brief implements the set channel access command
  *  @ param ctx - context pointer
  *  @ param channel - channel number
@@ -58,7 +65,7 @@ RspType<> ipmiSetChannelAccess(
     {
         lg2::debug("Set channel access - No support on channel: {CHANNEL}",
                    "CHANNEL", chNum);
-        return response(ccActionNotSupportedForChannel);
+        return responseActionNotSupportedForChannel();
     }
 
     ChannelAccess chActData;
@@ -108,7 +115,7 @@ RspType<> ipmiSetChannelAccess(
         case reserved:
         default:
             lg2::debug("Set channel access - Invalid access set mode");
-            return response(ccAccessModeNotSupportedForChannel);
+            return responseAccessModeNotSupportedForChannel();
     }
 
     // cannot static cast directly from uint2_t to enum; must go via int
@@ -129,7 +136,7 @@ RspType<> ipmiSetChannelAccess(
         case reserved:
         default:
             lg2::debug("Set channel access - Invalid access priv mode");
-            return response(ccAccessModeNotSupportedForChannel);
+            return responseAccessModeNotSupportedForChannel();
     }
 
     if (setNVFlag != 0)
@@ -204,7 +211,7 @@ ipmi ::RspType<uint3_t, // access mode,
     {
         lg2::debug("Get channel access - No support on channel: {CHANNEL}",
                    "CHANNEL", chNum);
-        return response(ccActionNotSupportedForChannel);
+        return responseActionNotSupportedForChannel();
     }
 
     ChannelAccess chAccess = {};
@@ -356,7 +363,7 @@ RspType<uint16_t, // stdPayloadType
     if (getChannelSessionSupport(chNum) == EChannelSessSupported::none)
     {
         lg2::debug("Get channel payload - No support on channel");
-        return response(ccActionNotSupportedForChannel);
+        return responseActionNotSupportedForChannel();
     }
     constexpr uint16_t stdPayloadType = standardPayloadBit(PayloadType::IPMI) |
                                         standardPayloadBit(PayloadType::SOL);
@@ -389,7 +396,6 @@ RspType<uint8_t> // formatVersion
 {
     uint8_t channel =
         convertCurrentChannelNum(static_cast<uint8_t>(chNum), ctx->channel);
-    constexpr uint8_t payloadTypeNotSupported = 0x80;
 
     if (reserved || !isValidChannel(channel))
     {
@@ -400,14 +406,14 @@ RspType<uint8_t> // formatVersion
     if (getChannelSessionSupport(channel) == EChannelSessSupported::none)
     {
         lg2::debug("Get channel payload version - No support on channel");
-        return response(payloadTypeNotSupported);
+        return responsePayloadTypeNotSupported();
     }
 
     if (!isValidPayloadType(static_cast<PayloadType>(payloadTypeNum)))
     {
         lg2::error("Get channel payload version - Payload type unavailable");
 
-        return response(payloadTypeNotSupported);
+        return responsePayloadTypeNotSupported();
     }
 
     // BCD encoded version representation - 1.0

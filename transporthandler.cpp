@@ -259,6 +259,11 @@ static constexpr uint8_t oemCmdStart = 192;
 static constexpr uint8_t InteloemCmdStart = 199;
 bool IsDHCP = false;
 
+// IPMI completion codes for LAN/SOL configuration parameter commands
+static constexpr ipmi::Cc ccParamNotSupported = 0x80;
+static constexpr ipmi::Cc ccParamSetLocked = 0x81;
+static constexpr ipmi::Cc ccParamReadOnly = 0x82;
+
 static std::unordered_map<uint8_t, uint16_t> lastEnabledVlan;
 
 static std::mutex vlanMutex;

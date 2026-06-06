@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <ipmid/message.hpp>
 #include <ipmid/message/types.hpp>
+#include <phosphor-logging/lg2.hpp>
 #include <phosphor-logging/log.hpp>
 
 #include <array>
@@ -120,8 +122,7 @@ struct PackSingle<std::string>
         uint8_t len;
         if (t.length() > std::numeric_limits<decltype(len)>::max())
         {
-            using namespace phosphor::logging;
-            log<level::ERR>("long string truncated on IPMI message pack");
+            lg2::error("long string truncated on IPMI message pack");
             return 1;
         }
         len = static_cast<uint8_t>(t.length());

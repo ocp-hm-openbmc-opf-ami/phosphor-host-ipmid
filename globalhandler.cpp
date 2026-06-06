@@ -1,5 +1,3 @@
-#include "globalhandler.hpp"
-
 #include <PDKHooks.hpp>
 #include <ipmid/api.hpp>
 #include <ipmid/utils.hpp>
@@ -12,49 +10,43 @@
 #include <thread>
 
 static std::atomic_flag reset_queued = ATOMIC_FLAG_INIT;
-static constexpr auto bmcStateRoot = "/xyz/openbmc_project/state";
-static constexpr auto bmcStateIntf = "xyz.openbmc_project.State.BMC";
-static constexpr auto reqTransition = "RequestedBMCTransition";
-static constexpr auto match = "bmc0";
 
 constexpr auto SYSTEMD_SERVICE = "org.freedesktop.systemd1";
 constexpr auto SYSTEMD_OBJ_PATH = "/org/freedesktop/systemd1";
 constexpr auto SYSTEMD_INTERFACE = "org.freedesktop.systemd1.Manager";
 constexpr auto SYSTEMD_WARM_RESET_TARGET = "phosphor-ipmi-warm-reset.target";
 
-using namespace phosphor::logging;
-using BMC = sdbusplus::server::xyz::openbmc_project::state::BMC;
+using BMCState = sdbusplus::server::xyz::openbmc_project::state::BMC;
 
-void register_netfn_global_functions() __attribute__((constructor));
-
-void resetBMC()
-{
-    sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
-
-    auto bmcStateObj =
-        ipmi::getDbusObject(bus, bmcStateIntf, bmcStateRoot, match);
-
-    auto service = ipmi::getService(bus, bmcStateIntf, bmcStateObj.first);
-
-    ipmi::setDbusProperty(bus, service, bmcStateObj.first, bmcStateIntf,
-                          reqTransition,
-                          convertForMessage(BMC::Transition::Reboot));
-}
+void registerNetFnGlobalFunctions() __attribute__((constructor));
 
 /** @brief implements cold reset commands
  *    @param - None
  *  @returns IPMI completion code.
  */
-ipmi::RspType<> ipmiColdReset()
+ipmi::RspType<> ipmiColdReset(ipmi::Context::ptr ctx)
 {
     PDK_BMCColdReset();
-    try
+    ipmi::DbusObjectInfo bmcStateObj;
+    boost::system::error_code ec = ipmi::getDbusObject(
+        ctx, BMCState::interface, BMCState::namespace_path::value,
+        BMCState::namespace_path::bmc, bmcStateObj);
+    if (!ec)
     {
-        resetBMC();
+        std::string service;
+        ec = ipmi::getService(ctx, BMCState::interface, bmcStateObj.first,
+                              service);
+        if (!ec)
+        {
+            ec = ipmi::setDbusProperty(
+                ctx, service, bmcStateObj.first, BMCState::interface,
+                BMCState::property_names::requested_bmc_transition,
+                convertForMessage(BMCState::Transition::Reboot));
+        }
     }
-    catch (const std::exception& e)
+    if (ec)
     {
-        lg2::error("Exception in Global Reset: {ERROR}", "ERROR", e);
+        lg2::error("Exception in Cold Reset: {ERROR}", "ERROR", ec.what());
         return ipmi::responseUnspecifiedError();
     }
 
@@ -73,7 +65,7 @@ void warmResetBMC()
             [](boost::system::error_code ec) {
                 if (ec)
                 {
-                    log<level::ERR>("Error in warm reset");
+                    lg2::error("Error in warm reset");
                 }
                 return;
             },
@@ -84,7 +76,7 @@ void warmResetBMC()
             [](boost::system::error_code ec) {
                 if (ec)
                 {
-                    log<level::ERR>("Error in warm reset");
+                    lg2::error("Error in warm reset");
                 }
                 return;
             },
@@ -93,7 +85,7 @@ void warmResetBMC()
     }
     catch (std::exception& e)
     {
-        log<level::ERR>(e.what());
+        lg2::error("Exception in warm Reset: {ERROR}", "ERROR", e.what());
     }
 }
 
@@ -118,14 +110,15 @@ ipmi::RspType<> ipmiWarmReset()
             }
             catch (const std::exception& ex)
             {
-                log<level::ERR>(ex.what());
+                lg2::error("Exception in ipmi warm Reset: {ERROR}", "ERROR",
+                           ex.what());
                 reset_queued.clear();
             }
         }).detach();
     }
     catch (std::exception& e)
     {
-        log<level::ERR>(e.what());
+        lg2::error("Exception in ipmi warm Reset: {ERROR}", "ERROR", e.what());
         reset_queued.clear();
         return ipmi::responseUnspecifiedError();
     }
@@ -134,7 +127,7 @@ ipmi::RspType<> ipmiWarmReset()
     return ipmi::responseSuccess();
 }
 
-void register_netfn_global_functions()
+void registerNetFnGlobalFunctions()
 {
     // Cold Reset
     ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnApp,

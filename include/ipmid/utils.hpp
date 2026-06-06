@@ -4,19 +4,21 @@
 #include <ipmid/api-types.hpp>
 #include <ipmid/message.hpp>
 #include <ipmid/types.hpp>
+#include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/server.hpp>
 
+#include <charconv>
 #include <chrono>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <vector>
 
 namespace ipmi
 {
 
 using namespace std::literals::chrono_literals;
-
-constexpr auto MAPPER_BUS_NAME = "xyz.openbmc_project.ObjectMapper";
-constexpr auto MAPPER_OBJ = "/xyz/openbmc_project/object_mapper";
-constexpr auto MAPPER_INTF = "xyz.openbmc_project.ObjectMapper";
 
 constexpr auto ROOT = "/";
 constexpr auto HOST_MATCH = "host0";
@@ -187,29 +189,6 @@ ObjectTree getAllDbusObjects(
     sdbusplus::bus_t& bus, const std::string& serviceRoot,
     const std::string& interface, const std::string& match = {});
 
-/** @brief Deletes all the dbus objects from the given service root
-           which matches the object identifier.
- *  @param[in] bus - DBUS Bus Object.
- *  @param[in] serviceRoot - Service root path.
- *  @param[in] interface - Dbus interface.
- *  @param[in] match - Identifier for object.
- */
-void deleteAllDbusObjects(sdbusplus::bus_t& bus, const std::string& serviceRoot,
-                          const std::string& interface,
-                          const std::string& match = {})
-    __attribute__((deprecated));
-
-/** @brief Gets the ancestor objects of the given object
-           which implements the given interface.
- *  @param[in] bus - Dbus bus object.
- *  @param[in] path - Child Dbus object path.
- *  @param[in] interfaces - Dbus interface list.
- *  @return map of object path and service info.
- */
-ObjectTree getAllAncestors(sdbusplus::bus_t& bus, const std::string& path,
-                           InterfaceList&& interfaces)
-    __attribute__((deprecated));
-
 /********* Begin co-routine yielding alternatives ***************/
 
 /** @brief Get the D-Bus Service name for the input D-Bus path
@@ -224,19 +203,6 @@ ObjectTree getAllAncestors(sdbusplus::bus_t& bus, const std::string& path,
 boost::system::error_code getService(Context::ptr ctx, const std::string& intf,
                                      const std::string& path,
                                      std::string& service);
-
-/** @brief Gets the dbus sub tree implementing the given interface.
- *  @param[in] ctx - ipmi::Context::ptr
- *  @param[in] bus - DBUS Bus Object.
- *  @param[in] interfaces - Dbus interface.
- *  @param[in] subtreePath - subtree from where the search should start.
- *  @param[in] depth - Search depth
- *  @param[out] objectTree - map of object path and service info.
- *  @return map of object path and service info.
- */
-boost::system::error_code getSubTree(
-    Context::ptr ctx, const InterfaceList& interface,
-    const std::string& subtreePath, int32_t depth, ObjectTree& objectTree);
 
 /** @brief Gets the dbus sub tree implementing the given interface.
  *  @param[in] ctx - ipmi::Context::ptr
@@ -364,19 +330,6 @@ static inline boost::system::error_code getAllDbusObjects(
     return getAllDbusObjects(ctx, serviceRoot, interface, {}, objectTree);
 }
 
-/** @brief Deletes all the D-Bus objects from the given service root
-           which matches the object identifier.
- *  @param[in] ctx - ipmi::Context::ptr
- *  @param[out] ec - boost error code object
- *  @param[in] serviceRoot - Service root path.
- *  @param[in] interface - D-Bus interface.
- *  @param[in] match - Identifier for object.
- */
-boost::system::error_code deleteAllDbusObjects(
-    Context::ptr ctx, const std::string& serviceRoot,
-    const std::string& interface, const std::string& match = {})
-    __attribute__((deprecated));
-
 /** @brief Gets all managed objects associated with the given object
  *         path and service.
  *  @param[in] ctx - ipmi::Context::ptr
@@ -388,18 +341,6 @@ boost::system::error_code deleteAllDbusObjects(
 boost::system::error_code getManagedObjects(
     Context::ptr ctx, const std::string& service, const std::string& objPath,
     ObjectValueTree& objects);
-
-/** @brief Gets the ancestor objects of the given object
-           which implements the given interface.
- *  @param[in] ctx - ipmi::Context::ptr
- *  @param[in] path - Child D-Bus object path.
- *  @param[in] interfaces - D-Bus interface list.
- *  @param[out] ObjectTree - map of object path and service info.
- *  @return - boost error code object
- */
-boost::system::error_code getAllAncestors(
-    Context::ptr ctx, const std::string& path, const InterfaceList& interfaces,
-    ObjectTree& objectTree) __attribute__((deprecated));
 
 /** @brief Gets the value associated with the given object
  *         and the interface.
@@ -422,10 +363,10 @@ boost::system::error_code callDbusMethod(
  *         type of the value does not match the expected type
  *
  *  @tparam T - type of expected value to return
- *  @param[in] props - D-Bus propery map (Map of variants)
+ *  @param[in] props - D-Bus property map (Map of variants)
  *  @param[in] name - key name of property to fetch
  *  @param[in] defaultValue - default value to return on error
- *  @return - value from propery map at name, or defaultValue
+ *  @return - value from property map at name, or defaultValue
  */
 template <typename T>
 T mappedVariant(const ipmi::PropertyMap& props, const std::string& name,
@@ -481,6 +422,31 @@ void callDbusMethod(sdbusplus::bus_t& bus, const std::string& service,
 
 } // namespace method_no_args
 
+template <typename... InputArgs>
+boost::system::error_code callDbusMethod(
+    ipmi::Context::ptr ctx, const std::string& service,
+    const std::string& objPath, const std::string& interface,
+    const std::string& method, const InputArgs&... args)
+{
+    boost::system::error_code ec;
+    ctx->bus->yield_method_call(ctx->yield, ec, service, objPath, interface,
+                                method, args...);
+
+    return ec;
+}
+
+template <typename RetType, typename... InputArgs>
+RetType callDbusMethod(ipmi::Context::ptr ctx, boost::system::error_code& ec,
+                       const std::string& service, const std::string& objPath,
+                       const std::string& interface, const std::string& method,
+                       const InputArgs&... args)
+{
+    auto rc = ctx->bus->yield_method_call<RetType>(
+        ctx->yield, ec, service, objPath, interface, method, args...);
+
+    return rc;
+}
+
 /** @brief Perform the low-level i2c bus write-read.
  *  @param[in] i2cBus - i2c bus device node name, such as /dev/i2c-2.
  *  @param[in] targetAddr - i2c device target address.
@@ -490,4 +456,42 @@ void callDbusMethod(sdbusplus::bus_t& bus, const std::string& service,
 ipmi::Cc i2cWriteRead(std::string i2cBus, const uint8_t targetAddr,
                       std::vector<uint8_t> writeData,
                       std::vector<uint8_t>& readBuf);
+
+/** @brief Split a string into a vector of strings
+ *  @param[in] srcStr - The string to split
+ *  @param[in] delim - The delimiter to split the string on
+ *  @return A vector of strings
+ */
+std::vector<std::string> split(const std::string& srcStr, char delim);
+
+/** @brief Parse an integral value from a string without throwing exceptions.
+ *  @param[in] s - Input string_view to parse.
+ *  @param[in,out] out - Output parameter that receives the parsed value on
+ *                       success.
+ *  @param[in] base - Number base (10 or 16). If 16, 0x/0X prefix is optional.
+ *  @return True if parsing succeeds and the entire string is consumed;
+ *          otherwise false.
+ */
+template <typename T>
+inline bool tryParse(std::string_view s, T& out, int base = 10)
+{
+    static_assert(std::is_integral_v<T>,
+                  "tryParse only supports integral types");
+
+    if (s.empty())
+    {
+        return false;
+    }
+
+    if (base == 16 && s.size() >= 2 && s[0] == '0' &&
+        (s[1] == 'x' || s[1] == 'X'))
+    {
+        s.remove_prefix(2);
+    }
+
+    auto result = std::from_chars(s.data(), s.data() + s.size(), out, base);
+
+    return result.ec == std::errc{} && result.ptr == s.data() + s.size();
+}
+
 } // namespace ipmi

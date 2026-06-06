@@ -16,7 +16,6 @@
 
 #include "usercommands.hpp"
 
-#include "apphandler.hpp"
 #include "channel_layer.hpp"
 #include "user_layer.hpp"
 
@@ -32,6 +31,14 @@ namespace ipmi
 
 static constexpr uint8_t enableOperation = 0x00;
 static constexpr uint8_t disableOperation = 0x01;
+
+/** IPMI set password return codes (refer spec sec 22.30) */
+constexpr Cc ccPasswdFailMismatch = 0x80;
+
+static inline auto responsePasswdFailMismatch()
+{
+    return response(ccPasswdFailMismatch);
+}
 
 /** @brief implements the set user access command
  *  @param ctx - IPMI context pointer (for channel)
@@ -70,13 +77,14 @@ ipmi::RspType<> ipmiSetUserAccess(
         convertCurrentChannelNum(static_cast<uint8_t>(channel), ctx->channel);
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Set user access - Invalid channel request");
+        lg2::debug("Set user access - Invalid channel request: {CHANNEL}",
+                   "CHANNEL", chNum);
         return ipmi::response(invalidChannel);
     }
     if (getChannelSessionSupport(chNum) == EChannelSessSupported::none)
     {
         lg2::debug("Set user access - No support on channel");
-        return ipmi::response(ccActionNotSupportedForChannel);
+        return ipmi::responseActionNotSupportedForChannel();
     }
     if (!ipmiUserIsValidUserId(static_cast<uint8_t>(userId)))
     {
@@ -149,7 +157,7 @@ ipmi::RspType<uint6_t, // max channel users
     if (getChannelSessionSupport(chNum) == EChannelSessSupported::none)
     {
         lg2::debug("Get user access - No support on channel");
-        return ipmi::response(ccActionNotSupportedForChannel);
+        return ipmi::responseActionNotSupportedForChannel();
     }
     if (!ipmiUserIsValidUserId(static_cast<uint8_t>(userId)))
     {
@@ -197,7 +205,7 @@ ipmi::RspType<uint6_t, // max channel users
         static_cast<uint1_t>(privAccess.reserved));
 }
 
-/** @brief implementes the get user name command
+/** @brief implements the get user name command
  *  @param[in] ctx - ipmi command context
  *  @param[in] userId - 6-bit user ID
  *  @param[in] reserved - 2-bits reserved
@@ -229,7 +237,7 @@ ipmi::RspType<> ipmiSetUserName(
     return ipmi::response(res);
 }
 
-/** @brief implementes the get user name command
+/** @brief implements the get user name command
  *  @param[in] ctx - ipmi command context
  *  @param[in] userId - 6-bit user ID
  *  @param[in] reserved - 2-bits reserved
@@ -264,7 +272,7 @@ ipmi::RspType<std::array<uint8_t, ipmi::ipmiMaxUserName>> // user name
     return ipmi::responseSuccess(std::move(userNameFixed));
 }
 
-/** @brief implementes the get user name command
+/** @brief implements the get user name command
  *  @param[in] ctx - ipmi command context
  *  @param[in] userId - 6-bit user ID
  *  @param[in] reserved - 2-bits reserved
@@ -353,8 +361,7 @@ ipmi::RspType<> // user name
         {
             lg2::debug("Test password failed, user Id: {USER_ID}", "USER_ID",
                        userId);
-            static constexpr ipmi::Cc ipmiCCPasswdFailMismatch = 0x80;
-            return ipmi::response(ipmiCCPasswdFailMismatch);
+            return ipmi::responsePasswdFailMismatch();
         }
         return ipmi::responseSuccess();
     }
@@ -421,7 +428,7 @@ ipmi::RspType<uint8_t,  // channel number
     if (getChannelSessionSupport(channel) == EChannelSessSupported::none)
     {
         lg2::debug("Get channel auth capabilities - No support on channel");
-        return ipmi::response(ccActionNotSupportedForChannel);
+        return ipmi::responseActionNotSupportedForChannel();
     }
 
     constexpr bool extDataSupport = true; // true for IPMI 2.0 extensions
@@ -514,7 +521,7 @@ ipmi::RspType<> ipmiSetUserPayloadAccess(
     }
     if (getChannelSessionSupport(chNum) == EChannelSessSupported::none)
     {
-        return ipmi::response(ccActionNotSupportedForChannel);
+        return ipmi::responseActionNotSupportedForChannel();
     }
     if (!ipmiUserIsValidUserId(static_cast<uint8_t>(userId)))
     {
@@ -599,7 +606,7 @@ ipmi::RspType<bool,    // stdPayload0ipmiReserved
     }
     if (getChannelSessionSupport(chNum) == EChannelSessSupported::none)
     {
-        return ipmi::response(ccActionNotSupportedForChannel);
+        return ipmi::responseActionNotSupportedForChannel();
     }
     if (!ipmiUserIsValidUserId(static_cast<uint8_t>(userId)))
     {

@@ -19,8 +19,9 @@
 
 #include <dlfcn.h>
 
-#include <boost/algorithm/string.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/spawn.hpp>
 #include <host-cmd-manager.hpp>
 #include <ipmid-host/cmd.hpp>
 #include <ipmid/api.hpp>
@@ -341,6 +342,8 @@ message::Response::ptr executeIpmiGroupCommand(message::Request::ptr request)
         return errorResponse(request, ccReqDataLenInvalid);
     }
     auto group = static_cast<Group>(bytes);
+    // Set defining body code
+    request->ctx->group = group;
     message::Response::ptr response =
         executeIpmiCommandCommon(groupHandlerMap, group, request);
     ipmi::message::Payload prefix;
@@ -444,11 +447,11 @@ void updateOwners(sdbusplus::asio::connection& conn, const std::string& name)
         name);
 }
 
-void doListNames(boost::asio::io_context& io, sdbusplus::asio::connection& conn)
+void doListNames(sdbusplus::asio::connection& conn)
 {
     conn.async_method_call(
-        [&io, &conn](const boost::system::error_code ec,
-                     std::vector<std::string> busNames) {
+        [&conn](const boost::system::error_code ec,
+                std::vector<std::string> busNames) {
             if (ec)
             {
                 lg2::error("Error getting dbus names: {ERROR}", "ERROR",
@@ -483,7 +486,8 @@ void nameChangeHandler(sdbusplus::message_t& message)
 
     if (!oldOwner.empty())
     {
-        if (boost::starts_with(oldOwner, ":"))
+        //   if (boost::starts_with(oldOwner, ":")) //remove
+        if (oldOwner.starts_with(":"))
         {
             // Connection removed
             auto it = uniqueNameToChannelNumber.find(oldOwner);
@@ -729,8 +733,12 @@ auto executionEntry(boost::asio::yield_context yield, sdbusplus::message_t& m,
     auto ctx = std::make_shared<ipmi::Context>(
         getSdBus(), netFn, lun, cmd, channel, userId, sessionId, privilege,
         rqSA, hostIdx, yield);
-    auto request =
-        std::make_shared<ipmi::message::Request>(ctx, ipmi::SecureBuffer(data));
+    /*    auto request =
+            std::make_shared<ipmi::message::Request>(ctx,
+       ipmi::SecureBuffer(data)); */ //remove
+
+    auto request = std::make_shared<ipmi::message::Request>(
+        ctx, std::forward<ipmi::SecureBuffer>(data));
 
     LogIPMICmdReq(channel, netFn, cmd, request);  // log IPMI command Req data
     message::Response::ptr response = executeIpmiCommand(request);
@@ -875,7 +883,7 @@ void ipmi_register_callback(ipmi_netfn_t netFn, ipmi_cmd_t cmd,
     // The original ipmi_register_callback allowed for group OEM handlers
     // to be registered via this same interface. It just so happened that
     // all the handlers were part of the DCMI group, so default to that.
-    if (netFn == NETFUN_GRPEXT)
+    if (netFn == ipmi::netFnGroup)
     {
         ipmi::impl::registerGroupHandler(ipmi::prioOpenBmcBase, ipmi::groupDCMI,
                                          cmd, realPriv, h);
@@ -919,41 +927,43 @@ void handleLegacyIpmiCommand(sdbusplus::message_t& m)
 {
     // make a copy so the next two moves don't wreak havoc on the stack
     sdbusplus::message_t b{m};
-    boost::asio::spawn(*getIoContext(), [b = std::move(b)](
-                                            boost::asio::yield_context yield) {
-        sdbusplus::message_t m{std::move(b)};
-        unsigned char seq = 0, netFn = 0, lun = 0, cmd = 0;
-        ipmi::SecureBuffer data;
+    boost::asio::spawn(
+        *getIoContext(),
+        [b = std::move(b)](boost::asio::yield_context yield) {
+            sdbusplus::message_t m{std::move(b)};
+            unsigned char seq = 0, netFn = 0, lun = 0, cmd = 0;
+            ipmi::SecureBuffer data;
 
-        m.read(seq, netFn, lun, cmd, data);
-        std::shared_ptr<sdbusplus::asio::connection> bus = getSdBus();
-        auto ctx = std::make_shared<ipmi::Context>(
-            bus, netFn, lun, cmd, 0, 0, 0, ipmi::Privilege::Admin, 0, 0, yield);
-        auto request = std::make_shared<ipmi::message::Request>(
-            ctx, std::forward<ipmi::SecureBuffer>(data));
-        ipmi::message::Response::ptr response =
-            ipmi::executeIpmiCommand(request);
+            m.read(seq, netFn, lun, cmd, data);
+            std::shared_ptr<sdbusplus::asio::connection> bus = getSdBus();
+            auto ctx = std::make_shared<ipmi::Context>(
+                bus, netFn, lun, cmd, 0, 0, 0, ipmi::Privilege::Admin, 0, 0,
+                yield);
+            auto request = std::make_shared<ipmi::message::Request>(
+                ctx, std::forward<ipmi::SecureBuffer>(data));
+            ipmi::message::Response::ptr response =
+                ipmi::executeIpmiCommand(request);
 
-        // Responses in IPMI require a bit set.  So there ya go...
-        netFn |= 0x01;
+            // Responses in IPMI require a bit set.  So there ya go...
+            netFn |= 0x01;
 
-        const char *dest, *path;
-        constexpr const char* DBUS_INTF = "org.openbmc.HostIpmi";
+            constexpr const char* DBUS_INTF = "org.openbmc.HostIpmi";
 
-        dest = m.get_sender();
-        path = m.get_path();
-        boost::system::error_code ec;
-        bus->yield_method_call(yield, ec, dest, path, DBUS_INTF, "sendMessage",
-                               seq, netFn, lun, cmd, response->cc,
-                               response->payload.raw);
-        if (ec)
-        {
-            lg2::error(
-                "Failed to send response to requestor ({NETFN}/{CMD}): {ERROR}",
-                "ERROR", ec.message(), "SENDER", dest, "NETFN", lg2::hex, netFn,
-                "CMD", lg2::hex, cmd);
-        }
-    });
+            std::string dest = m.get_sender();
+            std::string path = m.get_path();
+            boost::system::error_code ec = ipmi::callDbusMethod(
+                ctx, dest, path, DBUS_INTF, "sendMessage", seq, netFn, lun, cmd,
+                response->cc, response->payload.raw);
+
+            if (ec)
+            {
+                lg2::error(
+                    "Failed to send response to requestor ({NETFN}/{CMD}): {ERROR}",
+                    "ERROR", ec.message(), "SENDER", dest, "NETFN", lg2::hex,
+                    netFn, "CMD", lg2::hex, cmd);
+            }
+        },
+        boost::asio::detached);
 }
 
 #endif /* ALLOW_DEPRECATED_API */
@@ -1125,7 +1135,8 @@ int main(int argc, char* argv[])
             sdbusplus::bus::match::rules::arg0namespace(
                 ipmi::ipmiDbusChannelMatch),
         ipmi::nameChangeHandler);
-    ipmi::doListNames(*io, *sdbusp);
+    //    ipmi::doListNames(*io, *sdbusp); //remove
+    ipmi::doListNames(*sdbusp);
 
     int exitCode = 0;
     // set up boost::asio signal handling

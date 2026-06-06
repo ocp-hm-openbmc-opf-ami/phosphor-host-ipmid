@@ -133,7 +133,7 @@ int CipherConfig::writeCSPrivilegeLevels(const Json& jsonData)
                    "FILE_NAME", tmpFile);
         return -EIO;
     }
-    const auto& writeData = jsonData.dump();
+    const auto& writeData = jsonData.dump(4);
     if (write(fd, writeData.c_str(), writeData.size()) !=
         static_cast<ssize_t>(writeData.size()))
     {
@@ -178,7 +178,9 @@ ipmi::Cc CipherConfig::getCSPrivilegeLevels(
 {
     if (!isValidChannel(chNum))
     {
-        lg2::error("Invalid channel number: {CHANNEL}", "CHANNEL", chNum);
+        lg2::error(
+            "Get CS Privilege levels - Invalid channel number: {CHANNEL}",
+            "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -194,7 +196,9 @@ ipmi::Cc CipherConfig::setCSPrivilegeLevels(
 {
     if (!isValidChannel(chNum))
     {
-        lg2::error("Invalid channel number: {CHANNEL}", "CHANNEL", chNum);
+        lg2::error(
+            "Set CS Privilege levels - Invalid channel number: {CHANNEL}",
+            "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
 

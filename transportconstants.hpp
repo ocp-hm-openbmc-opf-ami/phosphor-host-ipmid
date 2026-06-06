@@ -2,8 +2,11 @@
 
 #include <ipmid/api-types.hpp>
 #include <stdplus/zstring_view.hpp>
+#include <xyz/openbmc_project/Network/IP/common.hpp>
 
 #include <cstdint>
+
+using NetworkIP = sdbusplus::common::xyz::openbmc_project::network::IP;
 
 namespace ipmi
 {
@@ -15,7 +18,6 @@ using namespace phosphor::logging;
 // D-Bus Network Daemon definitions
 constexpr auto PATH_ROOT = "/xyz/openbmc_project/network"_zsv;
 constexpr auto INTF_ETHERNET = "xyz.openbmc_project.Network.EthernetInterface";
-constexpr auto INTF_IP = "xyz.openbmc_project.Network.IP";
 constexpr auto INTF_IP_CREATE = "xyz.openbmc_project.Network.IP.Create";
 constexpr auto INTF_MAC = "xyz.openbmc_project.Network.MACAddress";
 constexpr auto INTF_NEIGHBOR = "xyz.openbmc_project.Network.Neighbor";
@@ -177,15 +179,13 @@ using RACFG_T = std::tuple<std::vector<uint8_t>, std::vector<uint8_t>, uint8_t,
                            std::vector<uint8_t>>;
 }; // namespace IPv6RouterControlFlag
 
-// LAN Handler specific response codes
-constexpr Cc ccParamNotSupported = 0x80;
-constexpr Cc ccParamSetLocked = 0x81;
-constexpr Cc ccParamReadOnly = 0x82;
-
 // VLANs are a 12-bit value
 constexpr uint16_t VLAN_VALUE_MASK = 0x0fff;
 constexpr uint16_t VLAN_ENABLE_FLAG = 0x8000;
 constexpr uint8_t VLAN_MAX_NUM = 2;
+
+// Arbitrary v4 Address Limits
+constexpr uint8_t MAX_IPV4_ADDRESSES = 2;
 
 // Arbitrary v6 Address Limits to prevent too much output in ipmitool
 constexpr uint8_t MAX_IPV6_STATIC_ADDRESSES = 16;

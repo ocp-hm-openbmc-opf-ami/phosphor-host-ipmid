@@ -16,7 +16,6 @@
 
 #include "channel_mgmt.hpp"
 
-#include "apphandler.hpp"
 #include "user_layer.hpp"
 
 #include <ifaddrs.h>
@@ -152,8 +151,9 @@ std::string ChannelConfig::getChannelName(const uint8_t chNum)
 {
     if (!isValidChannel(chNum))
     {
-        lg2::error("Invalid channel number: {CHANNEL_ID}", "CHANNEL_ID", chNum);
-        throw std::invalid_argument("Invalid channel number");
+        lg2::error("Get channel name - Invalid channel number: {CHANNEL_ID}",
+                   "CHANNEL_ID", chNum);
+        return "";
     }
 
     return channelData[chNum].chName;
@@ -379,11 +379,6 @@ bool ChannelConfig::isValidChannel(const uint8_t chNum)
         return false;
     }
 
-    if (channelData[chNum].isChValid == false)
-    {
-        lg2::debug("Channel is not valid");
-    }
-
     return channelData[chNum].isChValid;
 }
 
@@ -433,7 +428,8 @@ Cc ChannelConfig::getChannelInfo(const uint8_t chNum, ChannelInfo& chInfo)
 {
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Invalid channel");
+        lg2::debug("Get channel info - Invalid channel: {CHANNEL}", "CHANNEL",
+                   chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -448,7 +444,8 @@ Cc ChannelConfig::getChannelAccessData(const uint8_t chNum,
 {
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Invalid channel");
+        lg2::debug("Get channel access data - Invalid channel: {CHANNEL}",
+                   "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -477,7 +474,8 @@ Cc ChannelConfig::setChannelAccessData(const uint8_t chNum,
 {
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Invalid channel");
+        lg2::debug("Set channel info - Invalid channel: {CHANNEL}", "CHANNEL",
+                   chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -547,7 +545,9 @@ Cc ChannelConfig::getChannelAccessPersistData(const uint8_t chNum,
 {
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Invalid channel");
+        lg2::debug(
+            "Get channel access persist data - Invalid channel: {CHANNEL}",
+            "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -576,7 +576,9 @@ Cc ChannelConfig::setChannelAccessPersistData(const uint8_t chNum,
 {
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Invalid channel");
+        lg2::debug(
+            "Set channel access persist data - Invalid channel: {CHANNEL}",
+            "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -667,7 +669,9 @@ Cc ChannelConfig::getChannelAuthTypeSupported(const uint8_t chNum,
 {
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Invalid channel");
+        lg2::debug(
+            "Get channel auth type supported - Invalid channel: {CHANNEL}",
+            "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -680,7 +684,8 @@ Cc ChannelConfig::getChannelEnabledAuthType(
 {
     if (!isValidChannel(chNum))
     {
-        lg2::debug("Invalid channel");
+        lg2::debug("Get channel enabled auth type - Invalid channel: {CHANNEL}",
+                   "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
 
@@ -840,7 +845,7 @@ int ChannelConfig::writeJsonFile(const std::string& configFile,
                    tmpFile);
         return -EIO;
     }
-    const auto& writeData = jsonData.dump();
+    const auto& writeData = jsonData.dump(4);
     if (write(fd, writeData.c_str(), writeData.size()) !=
         static_cast<ssize_t>(writeData.size()))
     {
@@ -954,7 +959,7 @@ int ChannelConfig::loadChannelConfig()
             if (jsonChInfo[mediumTypeString].get<std::string>() == "lan-802.3")
             {
                 channelFound = false;
-                for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+                for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next)
                 {
                     if (jsonChData[nameString].get<std::string>() ==
                         ifa->ifa_name)
@@ -1305,7 +1310,7 @@ int ChannelConfig::setDbusProperty(
         lg2::debug(
             "set-property {SERVICE}:{OBJPATH}/{INTERFACE}.{PROP} failed: {MSG}",
             "SERVICE", service, "OBJPATH", objPath, "INTERFACE", interface,
-            "PROP", property);
+            "PROP", property, "MSG", e);
         return -EIO;
     }
 

@@ -42,8 +42,7 @@ bool doesDeviceExist(const uint8_t chNum)
 
     if (channelName.empty())
     {
-        phosphor::logging::log<phosphor::logging::level::DEBUG>(
-            "Ethernet device not found");
+        lg2::debug("Ethernet device not found");
         return false;
     }
 

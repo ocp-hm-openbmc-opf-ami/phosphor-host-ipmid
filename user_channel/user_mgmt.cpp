@@ -15,7 +15,6 @@
 */
 #include "user_mgmt.hpp"
 
-#include "apphandler.hpp"
 #include "channel_layer.hpp"
 #include "channel_mgmt.hpp"
 
@@ -35,7 +34,9 @@
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <xyz/openbmc_project/User/Common/error.hpp>
 
+#include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -44,87 +45,19 @@
 namespace ipmi
 {
 
-// TODO: Move D-Bus & Object Manager related stuff, to common files
-// D-Bus property related
-static constexpr const char* dBusPropertiesInterface =
-    "org.freedesktop.DBus.Properties";
-static constexpr const char* getAllPropertiesMethod = "GetAll";
-static constexpr const char* propertiesChangedSignal = "PropertiesChanged";
-static constexpr const char* setPropertiesMethod = "Set";
-
-// Object Manager related
-static constexpr const char* dBusObjManager =
-    "org.freedesktop.DBus.ObjectManager";
-static constexpr const char* getManagedObjectsMethod = "GetManagedObjects";
-// Object Manager signals
-static constexpr const char* intfAddedSignal = "InterfacesAdded";
-static constexpr const char* intfRemovedSignal = "InterfacesRemoved";
-
-// Object Mapper related
-static constexpr const char* objMapperService =
-    "xyz.openbmc_project.ObjectMapper";
-static constexpr const char* objMapperPath =
-    "/xyz/openbmc_project/object_mapper";
-static constexpr const char* objMapperInterface =
-    "xyz.openbmc_project.ObjectMapper";
-static constexpr const char* getObjectMethod = "GetObject";
-
-static constexpr const char* ipmiUserMutex = "ipmi_usr_mutex";
-static constexpr const char* ipmiMutexCleanupLockFile =
-    "/var/lib/ipmi/ipmi_usr_mutex_cleanup";
-static constexpr const char* ipmiUserSignalLockFile =
-    "/var/lib/ipmi/ipmi_usr_signal_mutex";
-static constexpr const char* ipmiUserDataFile = "/var/lib/ipmi/ipmi_user.json";
 static constexpr const char* ipmiUserDataBackupFile =
     "/var/lib/ipmi/ipmi_user_backup.json";
-static constexpr const char* ipmiGrpName = "ipmi";
-static constexpr size_t privNoAccess = 0xF;
-static constexpr size_t privMask = 0xF;
-
-// User manager related
-static constexpr const char* userMgrObjBasePath = "/xyz/openbmc_project/user";
-static constexpr const char* userObjBasePath = "/xyz/openbmc_project/user";
 static constexpr const char* AccountPolicyInterface =
     "xyz.openbmc_project.User.AccountPolicy";
-static constexpr const char* userMgrInterface =
-    "xyz.openbmc_project.User.Manager";
-static constexpr const char* usersInterface =
-    "xyz.openbmc_project.User.Attributes";
-static constexpr const char* deleteUserInterface =
-    "xyz.openbmc_project.Object.Delete";
-
 static constexpr const char* ChannelInterfaceMapMethod =
     "GetChannelInterfaceMap";
-static constexpr const char* createUserMethod = "CreateUser";
-static constexpr const char* deleteUserMethod = "Delete";
-static constexpr const char* renameUserMethod = "RenameUser";
-// User manager signal memebers
-static constexpr const char* userRenamedSignal = "UserRenamed";
-// Mgr interface properties
-static constexpr const char* allPrivProperty = "AllPrivileges";
-static constexpr const char* allGrpProperty = "AllGroups";
-// User interface properties
-static constexpr const char* userPrivProperty = "UserPrivilege";
-static constexpr const char* userGrpProperty = "UserGroups";
-static constexpr const char* userEnabledProperty = "UserEnabled";
 static constexpr const char* userChannelAccessProperty = "UserChannelAccess";
 static constexpr const char* userSnmpProperty = "SNMPAccessEnableStatus";
 static constexpr const char* smtpMailAddressProperty = "SMTPMailID";
 // OEM Privilege
 static constexpr const char* mediaGroup = "media";
-// SNMP Trap V3
-static constexpr const char* snmpGroup = "snmp";
 
 std::vector<uint8_t> listAvailableChannels;
-
-static std::array<std::string, (PRIVILEGE_OEM + 1)> ipmiPrivIndex = {
-    "priv-reserved", // PRIVILEGE_RESERVED - 0
-    "priv-callback", // PRIVILEGE_CALLBACK - 1
-    "priv-user",     // PRIVILEGE_USER - 2
-    "priv-operator", // PRIVILEGE_OPERATOR - 3
-    "priv-admin",    // PRIVILEGE_ADMIN - 4
-    "priv-custom"    // PRIVILEGE_OEM - 5
-};
 
 using namespace phosphor::logging;
 using Json = nlohmann::json;
@@ -143,30 +76,6 @@ std::unique_ptr<sdbusplus::bus::match_t> userMgrRenamedSignal
     __attribute__((init_priority(101)));
 std::unique_ptr<sdbusplus::bus::match_t> userPropertiesSignal
     __attribute__((init_priority(101)));
-
-// TODO:  Below code can be removed once it is moved to common layer libmiscutil
-std::string getUserService(sdbusplus::bus_t& bus, const std::string& intf,
-                           const std::string& path)
-{
-    auto mapperCall = bus.new_method_call(objMapperService, objMapperPath,
-                                          objMapperInterface, getObjectMethod);
-
-    mapperCall.append(path);
-    mapperCall.append(std::vector<std::string>({intf}));
-
-    auto mapperResponseMsg = bus.call(mapperCall);
-
-    std::map<std::string, std::vector<std::string>> mapperResponse;
-    mapperResponseMsg.read(mapperResponse);
-
-    if (mapperResponse.begin() == mapperResponse.end())
-    {
-        throw sdbusplus::exception::SdBusError(
-            -EIO, "ERROR in reading the mapper response");
-    }
-
-    return mapperResponse.begin()->first;
-}
 
 void setDbusProperty(sdbusplus::bus_t& bus, const std::string& service,
                      const std::string& objPath, const std::string& interface,
@@ -189,25 +98,6 @@ void setDbusProperty(sdbusplus::bus_t& bus, const std::string& service,
                    interface);
         throw;
     }
-}
-
-std::string getUserServiceName()
-{
-    static sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
-    static std::string userMgmtService;
-    if (userMgmtService.empty())
-    {
-        try
-        {
-            userMgmtService =
-                ipmi::getUserService(bus, userMgrInterface, userMgrObjBasePath);
-        }
-        catch (const sdbusplus::exception_t& e)
-        {
-            userMgmtService.clear();
-        }
-    }
-    return userMgmtService;
 }
 
 UserAccess& getUserAccessObject()
@@ -247,9 +137,8 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
         size_t usrIndex = 1;
         for (; usrIndex <= ipmiMaxUsers; ++usrIndex)
         {
-            std::string curName(
-                reinterpret_cast<char*>(userData->user[usrIndex].userName), 0,
-                ipmiMaxUserName);
+            std::string curName =
+                safeUsernameString(userData->user[usrIndex].userName);
             if (userName == curName)
             {
                 break; // found the entry
@@ -291,11 +180,9 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
             }
             case UserUpdateEvent::userRenamed:
             {
-                std::memset(userData->user[usrIndex].userName, 0,
-                            ipmiMaxUserName);
-                std::memcpy(
-                    reinterpret_cast<char*>(userData->user[usrIndex].userName),
-                    newUserName.c_str(), ipmiMaxUserName);
+                safeUsernameCopyToBuffer(
+                    userData->user[usrIndex].userName,
+                    sizeof(userData->user[usrIndex].userName), newUserName);
                 ipmiRenameUserEntryPassword(userName, newUserName);
                 break;
             }
@@ -481,7 +368,7 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                     try
                     {
                         auto method = bus.new_method_call(
-                            getUserServiceName().c_str(), msg.get_path(),
+                            userMgrService, msg.get_path(),
                             dBusPropertiesInterface, getAllPropertiesMethod);
                         method.append(usersInterface);
                         auto reply = bus.call(method);
@@ -489,7 +376,7 @@ void userUpdatedSignalHandler(UserAccess& usrAccess, sdbusplus::message_t& msg)
                     }
                     catch (const sdbusplus::exception_t& e)
                     {
-                        lg2::debug("Failed to excute {METHOD}, path: {PATH}",
+                        lg2::debug("Failed to execute {METHOD}, path: {PATH}",
                                    "METHOD", getAllPropertiesMethod, "PATH",
                                    msg.get_path());
                         return;
@@ -548,6 +435,7 @@ UserAccess::UserAccess() : bus(ipmid_get_sd_bus_connection())
     if (!mutexCleanUpFile.good())
     {
         lg2::debug("Unable to open mutex cleanup file");
+        return;
     }
     else
     {
@@ -718,15 +606,15 @@ bool UserAccess::isValidUserName(const std::string& userName)
     std::map<DbusUserObjPath, DbusUserObjValue> properties;
     try
     {
-        auto method = bus.new_method_call(getUserServiceName().c_str(),
-                                          userMgrObjBasePath, dBusObjManager,
-                                          getManagedObjectsMethod);
+        auto method =
+            bus.new_method_call(userMgrService, userMgrObjBasePath,
+                                dBusObjManager, getManagedObjectsMethod);
         auto reply = bus.call(method);
         reply.read(properties);
     }
     catch (const sdbusplus::exception_t& e)
     {
-        lg2::error("Failed to excute {METHOD}, path: {PATH}", "METHOD",
+        lg2::error("Failed to execute {METHOD}, path: {PATH}", "METHOD",
                    getManagedObjectsMethod, "PATH", userMgrObjBasePath);
         return false;
     }
@@ -828,7 +716,7 @@ int pamUpdatePasswd(const char* username, const char* password)
 {
     const struct pam_conv localConversation = {pamFunctionConversation,
                                                const_cast<char*>(password)};
-    pam_handle_t* localAuthHandle = NULL; // this gets set by pam_start
+    pam_handle_t* localAuthHandle = nullptr; // this gets set by pam_start
 
     int retval =
         pam_start("passwd", username, &localConversation, &localAuthHandle);
@@ -854,7 +742,7 @@ bool pamUserCheckAuthenticate(std::string_view username,
     const struct pam_conv localConversation = {
         pamFunctionConversation, const_cast<char*>(password.data())};
 
-    pam_handle_t* localAuthHandle = NULL; // this gets set by pam_start
+    pam_handle_t* localAuthHandle = nullptr; // this gets set by pam_start
 
     if (pam_start("dropbear", username.data(), &localConversation,
                   &localAuthHandle) != PAM_SUCCESS)
@@ -915,8 +803,8 @@ Cc UserAccess::setUserPassword(const uint8_t userId, const char* userPassword)
     }
 
     ipmi::SecureString passwd;
-    passwd.assign(reinterpret_cast<const char*>(userPassword), 0,
-                  maxIpmi20PasswordSize);
+    size_t len = strnlen(userPassword, maxIpmi20PasswordSize);
+    passwd.assign(reinterpret_cast<const char*>(userPassword), len);
     int retval = pamUpdatePasswd(userName.c_str(), passwd.c_str());
 
     switch (retval)
@@ -950,8 +838,9 @@ Cc UserAccess::setUserEnabledState(const uint8_t userId,
         userLock{*userMutex};
     UserInfo* userInfo = getUserInfo(userId);
     std::string userName;
-    userName.assign(reinterpret_cast<char*>(userInfo->userName), 0,
-                    ipmiMaxUserName);
+
+    safeUsernameAssign(userName, userInfo->userName);
+
     if (userName.empty())
     {
         lg2::debug("User name not set / invalid");
@@ -962,7 +851,7 @@ Cc UserAccess::setUserEnabledState(const uint8_t userId,
         sdbusplus::message::object_path tempUserPath(userObjBasePath);
         tempUserPath /= userName;
         std::string userPath(tempUserPath);
-        setDbusProperty(bus, getUserServiceName(), userPath, usersInterface,
+        setDbusProperty(bus, userMgrService, userPath, usersInterface,
                         userEnabledProperty, enabledState);
         userInfo->userEnabled = enabledState;
         try
@@ -987,6 +876,9 @@ Cc UserAccess::setUserPayloadAccess(
 
     if (!isValidChannel(chNum))
     {
+        lg2::debug(
+            "Set user payload access - Invalid channel request: {CHANNEL}",
+            "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
     if (!isValidUserId(userId))
@@ -1055,6 +947,9 @@ Cc UserAccess::setUserPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
     bool dbusUpdateRequired = false;
     if (!isValidChannel(chNum))
     {
+        lg2::debug(
+            "Set user privilege access - Invalid channel request: {CHANNEL}",
+            "CHANNEL", chNum);
         return ccInvalidFieldRequest;
     }
     if (!isValidUserId(userId))
@@ -1065,8 +960,7 @@ Cc UserAccess::setUserPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
         userLock{*userMutex};
     UserInfo* userInfo = getUserInfo(userId);
     std::string userName;
-    userName.assign(reinterpret_cast<char*>(userInfo->userName), 0,
-                    ipmiMaxUserName);
+    safeUsernameAssign(userName, userInfo->userName);
     if (userName.empty())
     {
         lg2::debug("User name not set / invalid");
@@ -1104,7 +998,7 @@ Cc UserAccess::setUserPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
         sdbusplus::message::object_path tempUserPath(userObjBasePath);
         tempUserPath /= userName;
         std::string userPath(tempUserPath);
-        setDbusProperty(bus, getUserServiceName(), userPath, usersInterface,
+        setDbusProperty(bus, userMgrService, userPath, usersInterface,
                         userPrivProperty, listPriv);
     }
     dbusUpdateRequired = false;
@@ -1129,7 +1023,7 @@ Cc UserAccess::setUserPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
             sdbusplus::message::object_path tempUserPath(userObjBasePath);
             tempUserPath /= userName;
             std::string userPath(tempUserPath);
-            setDbusProperty(bus, getUserServiceName(), userPath, usersInterface,
+            setDbusProperty(bus, userMgrService, userPath, usersInterface,
                             userChannelAccessProperty, channelAccessIPMI);
         }
 
@@ -1160,9 +1054,8 @@ uint8_t UserAccess::getUserId(const std::string& userName)
     size_t usrIndex = 1;
     for (; usrIndex <= ipmiMaxUsers; ++usrIndex)
     {
-        std::string curName(
-            reinterpret_cast<char*>(usersTbl.user[usrIndex].userName), 0,
-            ipmiMaxUserName);
+        std::string curName =
+            safeUsernameString(usersTbl.user[usrIndex].userName);
         if (userName == curName)
         {
             break; // found the entry
@@ -1184,8 +1077,7 @@ Cc UserAccess::getUserName(const uint8_t userId, std::string& userName)
         return ccParmOutOfRange;
     }
     UserInfo* userInfo = getUserInfo(userId);
-    userName.assign(reinterpret_cast<char*>(userInfo->userName), 0,
-                    ipmiMaxUserName);
+    safeUsernameAssign(userName, userInfo->userName);
     return ccSuccess;
 }
 
@@ -1240,14 +1132,14 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
         std::string userPath(tempUserPath);
         try
         {
-            auto method = bus.new_method_call(
-                getUserServiceName().c_str(), userPath.c_str(),
-                deleteUserInterface, deleteUserMethod);
+            auto method =
+                bus.new_method_call(userMgrService, userPath.c_str(),
+                                    deleteUserInterface, deleteUserMethod);
             auto reply = bus.call(method);
         }
         catch (const sdbusplus::exception_t& e)
         {
-            lg2::debug("Failed to excute {METHOD}, path:{PATH}", "METHOD",
+            lg2::debug("Failed to execute {METHOD}, path:{PATH}", "METHOD",
                        deleteUserMethod, "PATH", userPath);
             return ccUnspecifiedError;
         }
@@ -1262,9 +1154,9 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
                 return ccUnspecifiedError;
             }
             // Create new user
-            auto method = bus.new_method_call(
-                getUserServiceName().c_str(), userMgrObjBasePath,
-                userMgrInterface, createUserMethod);
+            auto method =
+                bus.new_method_call(userMgrService, userMgrObjBasePath,
+                                    userMgrInterface, createUserMethod);
             std::vector<std::string> groups = availableGroups;
             // find media group and remove it, by default user privilege user
             // should not have media privilege
@@ -1286,14 +1178,14 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
         }
         catch (const sdbusplus::exception_t& e)
         {
-            lg2::debug("Failed to excute {METHOD}, path: {PATH}", "METHOD",
+            lg2::debug("Failed to execute {METHOD}, path: {PATH}", "METHOD",
                        createUserMethod, "PATH", userMgrObjBasePath);
             return ccUnspecifiedError;
         }
 
-        std::memset(userInfo->userName, 0, sizeof(userInfo->userName));
-        std::memcpy(userInfo->userName,
-                    static_cast<const void*>(userName.data()), userName.size());
+        safeUsernameCopyToBuffer(userInfo->userName, sizeof(userInfo->userName),
+                                 userName);
+
         userInfo->userInSystem = true;
         for (size_t chIndex = 0; chIndex < ipmiMaxChannels; chIndex++)
         {
@@ -1306,26 +1198,21 @@ Cc UserAccess::setUserName(const uint8_t userId, const std::string& userName)
         try
         {
             // User rename
-            auto method = bus.new_method_call(
-                getUserServiceName().c_str(), userMgrObjBasePath,
-                userMgrInterface, renameUserMethod);
+            auto method =
+                bus.new_method_call(userMgrService, userMgrObjBasePath,
+                                    userMgrInterface, renameUserMethod);
             method.append(oldUser.c_str(), userName.c_str());
             auto reply = bus.call(method);
         }
         catch (const sdbusplus::exception_t& e)
         {
-            lg2::debug("Failed to excute {METHOD}, path: {PATH}", "METHOD",
+            lg2::debug("Failed to execute {METHOD}, path: {PATH}", "METHOD",
                        renameUserMethod, "PATH", userMgrObjBasePath);
             return ccUnspecifiedError;
         }
-        std::fill(static_cast<uint8_t*>(userInfo->userName),
-                  static_cast<uint8_t*>(userInfo->userName) +
-                      sizeof(userInfo->userName),
-                  0);
 
-        std::memset(userInfo->userName, 0, sizeof(userInfo->userName));
-        std::memcpy(userInfo->userName,
-                    static_cast<const void*>(userName.data()), userName.size());
+        safeUsernameCopyToBuffer(userInfo->userName, sizeof(userInfo->userName),
+                                 userName);
 
         ipmiRenameUserEntryPassword(oldUser, userName);
         userInfo->userInSystem = true;
@@ -1484,10 +1371,10 @@ void UserAccess::readUserData()
         std::string userName = userInfo[jsonUserName].get<std::string>();
         std::string userMailId =
             userInfo[jsonUserSMTPMailId].get<std::string>();
-        std::memset(usersTbl.user[usrIndex].userName, 0, ipmiMaxUserName);
-        std::memcpy(reinterpret_cast<char*>(usersTbl.user[usrIndex].userName),
-                    userName.c_str(), ipmiMaxUserName);
-
+        // Fixed-width username buffer in struct
+        safeUsernameCopyToBuffer(usersTbl.user[usrIndex].userName,
+                                 sizeof(usersTbl.user[usrIndex].userName),
+                                 userName);
         std::memset(usersTbl.user[usrIndex].userMailId, 0,
                     sizeof(usersTbl.user[usrIndex].userMailId));
         std::memcpy(usersTbl.user[usrIndex].userMailId, userMailId.c_str(),
@@ -1595,9 +1482,8 @@ void UserAccess::writeUserData()
     for (size_t usrIndex = 1; usrIndex <= ipmiMaxUsers; ++usrIndex)
     {
         Json jsonUserInfo;
-        jsonUserInfo[jsonUserName] = std::string(
-            reinterpret_cast<char*>(usersTbl.user[usrIndex].userName), 0,
-            ipmiMaxUserName);
+        jsonUserInfo[jsonUserName] =
+            safeUsernameString(usersTbl.user[usrIndex].userName);
         std::vector<std::string> privilege(ipmiMaxChannels);
         std::vector<bool> ipmiEnabled(ipmiMaxChannels);
         std::vector<bool> linkAuthEnabled(ipmiMaxChannels);
@@ -1649,7 +1535,7 @@ void UserAccess::writeUserData()
         throw std::ios_base::failure(
             "Error in creating temporary IPMI user data file");
     }
-    const auto& writeStr = jsonUsersTbl.dump();
+    const auto& writeStr = jsonUsersTbl.dump(4);
     if (write(fd, writeStr.c_str(), writeStr.size()) !=
         static_cast<ssize_t>(writeStr.size()))
     {
@@ -1694,9 +1580,8 @@ bool UserAccess::addUserEntry(
     // user index 0 is reserved, starts with 1
     for (size_t usrIndex = 1; usrIndex <= ipmiMaxUsers; ++usrIndex)
     {
-        std::string curName(
-            reinterpret_cast<char*>(userData->user[usrIndex].userName), 0,
-            ipmiMaxUserName);
+        std::string curName =
+            safeUsernameString(userData->user[usrIndex].userName);
         if (userName == curName)
         {
             lg2::debug("Username {USER_NAME} exists", "USER_NAME", userName);
@@ -1792,9 +1677,7 @@ void UserAccess::deleteUserIndex(const size_t& usrIdx)
 {
     UsersTbl* userData = getUsersTblPtr();
 
-    std::string userName(
-        reinterpret_cast<char*>(userData->user[usrIdx].userName), 0,
-        ipmiMaxUserName);
+    std::string userName = safeUsernameString(userData->user[usrIdx].userName);
     if (isDefaultUser(userName))
     {
         lg2::info("Privilege update attempt blocked for default user: {USER}",
@@ -1802,10 +1685,8 @@ void UserAccess::deleteUserIndex(const size_t& usrIdx)
         return;
     }
     ipmiClearUserEntryPassword(userName);
-    std::fill(static_cast<uint8_t*>(userData->user[usrIdx].userName),
-              static_cast<uint8_t*>(userData->user[usrIdx].userName) +
-                  sizeof(userData->user[usrIdx].userName),
-              0);
+    std::memset(userData->user[usrIdx].userName, 0,
+                sizeof(userData->user[usrIdx].userName));
     for (size_t chIndex = 0; chIndex < ipmiMaxChannels; ++chIndex)
     {
         userData->user[usrIdx].userPrivAccess[chIndex].privilege = privNoAccess;
@@ -1847,9 +1728,9 @@ void UserAccess::getSystemPrivAndGroups()
     std::map<std::string, PrivAndGroupType> properties;
     try
     {
-        auto method = bus.new_method_call(
-            getUserServiceName().c_str(), userMgrObjBasePath,
-            dBusPropertiesInterface, getAllPropertiesMethod);
+        auto method = bus.new_method_call(userMgrService, userMgrObjBasePath,
+                                          dBusPropertiesInterface,
+                                          getAllPropertiesMethod);
         method.append(userMgrInterface);
 
         auto reply = bus.call(method);
@@ -1857,7 +1738,7 @@ void UserAccess::getSystemPrivAndGroups()
     }
     catch (const sdbusplus::exception_t& e)
     {
-        lg2::debug("Failed to excute {METHOD}, path: {PATH}", "METHOD",
+        lg2::debug("Failed to execute {METHOD}, path: {PATH}", "METHOD",
                    getAllPropertiesMethod, "PATH", userMgrObjBasePath);
         return;
     }
@@ -2018,15 +1899,15 @@ void UserAccess::cacheUserDataFile()
     std::map<DbusUserObjPath, DbusUserObjValue> managedObjs;
     try
     {
-        auto method = bus.new_method_call(getUserServiceName().c_str(),
-                                          userMgrObjBasePath, dBusObjManager,
-                                          getManagedObjectsMethod);
+        auto method =
+            bus.new_method_call(userMgrService, userMgrObjBasePath,
+                                dBusObjManager, getManagedObjectsMethod);
         auto reply = bus.call(method);
         reply.read(managedObjs);
     }
     catch (const sdbusplus::exception_t& e)
     {
-        lg2::debug("Failed to excute {METHOD}, path: {PATH}", "METHOD",
+        lg2::debug("Failed to execute {METHOD}, path: {PATH}", "METHOD",
                    getManagedObjectsMethod, "PATH", userMgrObjBasePath);
         return;
     }
@@ -2043,9 +1924,8 @@ void UserAccess::cacheUserDataFile()
             std::string smtpMailAddress;
             std::vector<uint8_t> userChannelAccessVal;
 
-            std::string userName(
-                reinterpret_cast<char*>(userData->user[usrIdx].userName), 0,
-                ipmiMaxUserName);
+            std::string userName =
+                safeUsernameString(userData->user[usrIdx].userName);
             sdbusplus::message::object_path tempUserPath(userObjBasePath);
             tempUserPath /= userName;
             std::string usersPath(tempUserPath);
@@ -2056,7 +1936,7 @@ void UserAccess::cacheUserDataFile()
                 bool usrEnabled = false;
                 bool snmpAccess = false;
 
-                // User exist. Lets check and update other fileds
+                // User exist. Lets check and update other fields
                 getUserObjProperties(usrObj->second, usrGrps, usrPriv,
                                      userChannelAccessVal, usrEnabled,
                                      snmpAccess, smtpMailAddress);

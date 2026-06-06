@@ -21,18 +21,18 @@ using sdbusplus::common::xyz::openbmc_project::state::convertForMessage;
 using sdbusplus::error::xyz::openbmc_project::common::InternalFailure;
 using sdbusplus::server::xyz::openbmc_project::state::Watchdog;
 
-static constexpr char wd_path[] = "/xyz/openbmc_project/watchdog/host0";
-static constexpr char wd_intf[] = "xyz.openbmc_project.State.Watchdog";
-static constexpr char prop_intf[] = "org.freedesktop.DBus.Properties";
+static constexpr auto wdPath = "/xyz/openbmc_project/watchdog/host0";
+static constexpr auto propIntf = "org.freedesktop.DBus.Properties";
 
-ipmi::ServiceCache WatchdogService::wd_service(wd_intf, wd_path);
+ipmi::ServiceCache WatchdogService::wdService(Watchdog::interface, wdPath);
 
 WatchdogService::WatchdogService() : bus(ipmid_get_sd_bus_connection()) {}
 
 void WatchdogService::resetTimeRemaining(bool enableWatchdog)
 {
-    bool wasValid = wd_service.isValid(bus);
-    auto request = wd_service.newMethodCall(bus, wd_intf, "ResetTimeRemaining");
+    bool wasValid = wdService.isValid(bus);
+    auto request =
+        wdService.newMethodCall(bus, Watchdog::interface, "ResetTimeRemaining");
     request.append(enableWatchdog);
     try
     {
@@ -40,7 +40,7 @@ void WatchdogService::resetTimeRemaining(bool enableWatchdog)
     }
     catch (const std::exception& e)
     {
-        wd_service.invalidate();
+        wdService.invalidate();
         if (wasValid)
         {
             // Retry the request once in case the cached service was stale
@@ -55,9 +55,9 @@ void WatchdogService::resetTimeRemaining(bool enableWatchdog)
 
 WatchdogService::Properties WatchdogService::getProperties()
 {
-    bool wasValid = wd_service.isValid(bus);
-    auto request = wd_service.newMethodCall(bus, prop_intf, "GetAll");
-    request.append(wd_intf);
+    bool wasValid = wdService.isValid(bus);
+    auto request = wdService.newMethodCall(bus, propIntf, "GetAll");
+    request.append(Watchdog::interface);
 
     std::map<std::string, std::variant<bool, uint8_t, uint64_t, std::string>>
         properties;
@@ -68,7 +68,7 @@ WatchdogService::Properties WatchdogService::getProperties()
     }
     catch (const std::exception& e)
     {
-        wd_service.invalidate();
+        wdService.invalidate();
         if (wasValid)
         {
             // Retry the request once in case the cached service was stale
@@ -81,21 +81,22 @@ WatchdogService::Properties WatchdogService::getProperties()
 
     try
     {
-        Properties wd_prop;
-        wd_prop.initialized = std::get<bool>(properties.at("Initialized"));
-        wd_prop.enabled = std::get<bool>(properties.at("Enabled"));
-        wd_prop.expireAction = Watchdog::convertActionFromString(
+        Properties wdProp;
+        wdProp.initialized = std::get<bool>(properties.at("Initialized"));
+        wdProp.enabled = std::get<bool>(properties.at("Enabled"));
+        wdProp.expireAction = Watchdog::convertActionFromString(
             std::get<std::string>(properties.at("ExpireAction")));
-        wd_prop.timerUse = Watchdog::convertTimerUseFromString(
+        wdProp.timerUse = Watchdog::convertTimerUseFromString(
             std::get<std::string>(properties.at("CurrentTimerUse")));
-        wd_prop.expiredTimerUse = Watchdog::convertTimerUseFromString(
+        wdProp.expiredTimerUse = Watchdog::convertTimerUseFromString(
             std::get<std::string>(properties.at("ExpiredTimerUse")));
-        wd_prop.preTimeoutInterval =
+        wdProp.preTimeoutInterval =
             std::get<uint8_t>(properties.at("PreTimeoutInterval"));
-        wd_prop.interval = std::get<uint64_t>(properties.at("Interval"));
-        wd_prop.timeRemaining =
+
+        wdProp.interval = std::get<uint64_t>(properties.at("Interval"));
+        wdProp.timeRemaining =
             std::get<uint64_t>(properties.at("TimeRemaining"));
-        return wd_prop;
+        return wdProp;
     }
     catch (const std::exception& e)
     {
@@ -113,19 +114,19 @@ WatchdogService::Properties WatchdogService::getProperties()
 template <typename T>
 T WatchdogService::getProperty(const std::string& key)
 {
-    bool wasValid = wd_service.isValid(bus);
-    auto request = wd_service.newMethodCall(bus, prop_intf, "Get");
-    request.append(wd_intf, key);
+    bool wasValid = wdService.isValid(bus);
+    auto request = wdService.newMethodCall(bus, propIntf, "Get");
+    request.append(Watchdog::interface, key);
     try
     {
         auto response = bus.call(request);
-        std::variant<T> value;
-        response.read(value);
+        auto value = response.unpack<std::variant<T>>();
+
         return std::get<T>(value);
     }
     catch (const std::exception& e)
     {
-        wd_service.invalidate();
+        wdService.invalidate();
         if (wasValid)
         {
             // Retry the request once in case the cached service was stale
@@ -145,16 +146,16 @@ T WatchdogService::getProperty(const std::string& key)
 template <typename T>
 void WatchdogService::setProperty(const std::string& key, const T& val)
 {
-    bool wasValid = wd_service.isValid(bus);
-    auto request = wd_service.newMethodCall(bus, prop_intf, "Set");
-    request.append(wd_intf, key, std::variant<T>(val));
+    bool wasValid = wdService.isValid(bus);
+    auto request = wdService.newMethodCall(bus, propIntf, "Set");
+    request.append(Watchdog::interface, key, std::variant<T>(val));
     try
     {
         auto response = bus.call(request);
     }
     catch (const std::exception& e)
     {
-        wd_service.invalidate();
+        wdService.invalidate();
         if (wasValid)
         {
             // Retry the request once in case the cached service was stale

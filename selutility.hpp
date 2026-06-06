@@ -15,10 +15,6 @@ namespace ipmi
 namespace sel
 {
 
-static constexpr auto mapperBusName = "xyz.openbmc_project.ObjectMapper";
-static constexpr auto mapperObjPath = "/xyz/openbmc_project/object_mapper";
-static constexpr auto mapperIntf = "xyz.openbmc_project.ObjectMapper";
-
 static constexpr auto logWatchPath = "/xyz/openbmc_project/logging";
 static constexpr auto logBasePath = "/xyz/openbmc_project/logging/entry";
 static constexpr auto logEntryIntf = "xyz.openbmc_project.Logging.Entry";
@@ -36,7 +32,7 @@ using Resolved = bool;
 using Id = uint32_t;
 using Timestamp = uint64_t;
 using Message = std::string;
-using AdditionalData = std::vector<std::string>;
+using AdditionalData = std::map<std::string, std::string>;
 using PropertyType =
     std::variant<Resolved, Id, Timestamp, Message, AdditionalData>;
 
@@ -56,18 +52,6 @@ static constexpr bool partialAddSelEntry = false;
 static constexpr bool reserveSel = true;
 static constexpr bool getSelAllocationInfo = false;
 } // namespace operationSupport
-
-/** @struct GetSELEntryRequest
- *
- *  IPMI payload for Get SEL Entry command request.
- */
-struct GetSELEntryRequest
-{
-    uint16_t reservationID; //!< Reservation ID.
-    uint16_t selRecordID;   //!< SEL Record ID.
-    uint8_t offset;         //!< Offset into record.
-    uint8_t readLength;     //!< Bytes to read.
-} __attribute__((packed));
 
 constexpr size_t SELRecordLength = 16;
 

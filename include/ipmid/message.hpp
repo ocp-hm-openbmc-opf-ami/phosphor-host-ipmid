@@ -19,7 +19,7 @@
 #include <ipmid/api-types.hpp>
 #include <ipmid/message/types.hpp>
 #include <ipmid/types.hpp>
-#include <phosphor-logging/log.hpp>
+#include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/asio/connection.hpp>
 
 #include <algorithm>
@@ -48,7 +48,7 @@ struct Context
             Privilege priv, int rqSA, int hostIdx,
             boost::asio::yield_context& yield) :
         bus(bus), netFn(netFn), lun(lun), cmd(cmd), channel(channel),
-        userId(userId), sessionId(sessionId), priv(priv), rqSA(rqSA),
+        userId(userId), sessionId(sessionId), priv(priv), group(0), rqSA(rqSA),
         hostIdx(hostIdx), yield(yield)
     {}
 
@@ -61,6 +61,8 @@ struct Context
     int userId;
     uint32_t sessionId;
     Privilege priv;
+    // defining body code for netFnGroup
+    Group group;
     // srcAddr is only set on IPMB requests because
     // Platform Event Message needs it to determine the incoming format
     int rqSA;
@@ -119,11 +121,12 @@ struct Payload
 
     ~Payload()
     {
-        using namespace phosphor::logging;
         if (raw.size() != 0 && std::uncaught_exceptions() == 0 && !trailingOk &&
             !unpackCheck && !unpackError)
         {
-            log<level::ERR>("Failed to check request for full unpack");
+            lg2::error(
+                "Failed to check request for full unpack: raw size: {RAW_SIZE}",
+                "RAW_SIZE", raw.size());
         }
     }
 
@@ -274,7 +277,7 @@ struct Payload
      *
      * @param p - The payload to prepend
      *
-     * @retunr int - non-zero on prepend errors
+     * @return int - non-zero on prepend errors
      */
     int prepend(const ipmi::message::Payload& p)
     {
@@ -555,7 +558,7 @@ struct Response
      *
      * @param p - The payload to prepend
      *
-     * @retunr int - non-zero on prepend errors
+     * @return int - non-zero on prepend errors
      */
     int prepend(const ipmi::message::Payload& p)
     {

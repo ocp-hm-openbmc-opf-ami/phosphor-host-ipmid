@@ -104,11 +104,11 @@ struct Type12Record
         deviceCapabilities(capabilities), reserved{}, entityID(eid),
         entityInstance(entityInst), oem(mfrDefined)
     {
-        get_sdr::header::set_record_id(recordID, &header);
-        header.sdr_version = ipmiSdrVersion;
-        header.record_type = 0x12;
+        header.recordId = recordID;
+        header.sdrVersion = ipmiSdrVersion;
+        header.recordType = 0x12;
         size_t nameLen = std::min(sensorname.size(), sizeof(name));
-        header.record_length =
+        header.recordLength =
             sizeof(Type12Record) - sizeof(get_sdr::SensorDataRecordHeader) -
             sizeof(name) + nameLen;
         typeLengthCode = 0xc0 | nameLen;
@@ -123,10 +123,10 @@ namespace storage
 {
 
 constexpr const size_t type12Count = 2;
-ipmi_ret_t getFruSdrs(ipmi::Context::ptr ctx, size_t index,
-                      get_sdr::SensorDataFruRecord& resp);
+ipmi::Cc getFruSdrs(ipmi::Context::ptr ctx, size_t index,
+                    get_sdr::SensorDataFruRecord& resp);
 
-ipmi_ret_t getFruSdrCount(ipmi::Context::ptr ctx, size_t& count);
+ipmi::Cc getFruSdrCount(ipmi::Context::ptr ctx, size_t& count);
 
 std::vector<uint8_t> getType8SDRs(
     ipmi::sensor::EntityInfoMap::const_iterator& entity, uint16_t recordId);

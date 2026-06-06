@@ -20,12 +20,13 @@ using DbusProperty = std::string;
 
 using Association = std::tuple<std::string, std::string, std::string>;
 using ChannelListType = std::tuple<uint16_t, std::vector<uint16_t>>;
+using BootProgressCode = std::tuple<std::vector<uint8_t>, std::vector<uint8_t>>;
 
 using Value = std::variant<
     bool, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t,
     double, std::string, std::vector<uint8_t>, std::vector<uint16_t>,
     std::vector<uint32_t>, std::vector<std::string>, std::vector<Association>,
-    std::vector<ChannelListType>>;
+    std::vector<ChannelListType>, BootProgressCode>;
 
 using PropertyMap = std::map<DbusProperty, Value>;
 
@@ -217,8 +218,10 @@ enum class ThresholdMask
 {
     NON_CRITICAL_LOW_MASK = 0x01,
     CRITICAL_LOW_MASK = 0x02,
+    NON_RECOVERABLE_LOW_MASK = 0x4,
     NON_CRITICAL_HIGH_MASK = 0x08,
     CRITICAL_HIGH_MASK = 0x10,
+    NON_RECOVERABLE_HIGH_MASK = 0x20,
 };
 
 static constexpr uint8_t maxContainedEntities = 4;

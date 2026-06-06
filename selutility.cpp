@@ -8,6 +8,7 @@
 #include <phosphor-logging/elog-errors.hpp>
 #include <phosphor-logging/lg2.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
+#include <xyz/openbmc_project/ObjectMapper/common.hpp>
 
 #include <charconv>
 #include <chrono>
@@ -18,6 +19,8 @@ extern const ipmi::sensor::InvObjectIDMap invSensors;
 using namespace phosphor::logging;
 using InternalFailure =
     sdbusplus::error::xyz::openbmc_project::common::InternalFailure;
+
+using ObjectMapper = sdbusplus::common::xyz::openbmc_project::ObjectMapper;
 
 namespace
 {
@@ -56,29 +59,7 @@ inline bool isRecordOEM(uint8_t recordType)
     return recordType != systemEventRecord;
 }
 
-using additionalDataMap = std::map<std::string, std::string>;
 using entryDataMap = std::map<PropertyName, PropertyType>;
-/** Parse the entry with format like key=val */
-std::pair<std::string, std::string> parseEntry(const std::string& entry)
-{
-    constexpr auto equalSign = "=";
-    auto pos = entry.find(equalSign);
-    assert(pos != std::string::npos);
-    auto key = entry.substr(0, pos);
-    auto val = entry.substr(pos + 1);
-    return {key, val};
-}
-
-additionalDataMap parseAdditionalData(const AdditionalData& data)
-{
-    std::map<std::string, std::string> ret;
-
-    for (const auto& d : data)
-    {
-        ret.insert(parseEntry(d));
-    }
-    return ret;
-}
 
 int convert(const std::string_view& str, int base = 10)
 {
@@ -103,10 +84,10 @@ std::vector<uint8_t> convertVec(const std::string_view& str)
 
 /** Construct OEM SEL record according to IPMI spec 32.2, 32.3. */
 void constructOEMSEL(uint8_t recordType, std::chrono::milliseconds timestamp,
-                     const additionalDataMap& m, GetSELEntryResponse& record)
+                     const AdditionalData& data, GetSELEntryResponse& record)
 {
-    auto dataIter = m.find(strSensorData);
-    assert(dataIter != m.end());
+    auto dataIter = data.find(strSensorData);
+    assert(dataIter != data.end());
     auto sensorData = convertVec(dataIter->second);
     if (recordType >= 0xC0 && recordType < 0xE0)
     {
@@ -129,7 +110,7 @@ void constructOEMSEL(uint8_t recordType, std::chrono::milliseconds timestamp,
 }
 
 void constructSEL(uint8_t recordType, std::chrono::milliseconds timestamp,
-                  const additionalDataMap& m, const entryDataMap&,
+                  const AdditionalData& data, const entryDataMap&,
                   GetSELEntryResponse& record)
 {
     if (recordType != systemEventRecord)
@@ -143,8 +124,8 @@ void constructSEL(uint8_t recordType, std::chrono::milliseconds timestamp,
     record.event.eventRecord.sensorNum = 0xFF;
     record.event.eventRecord.eventType = 0;
 
-    auto iter = m.find(strSensorPath);
-    assert(iter != m.end());
+    auto iter = data.find(strSensorPath);
+    assert(iter != data.end());
     const auto& sensorPath = iter->second;
     auto sensorIter = invSensors.find(sensorPath);
 
@@ -154,8 +135,8 @@ void constructSEL(uint8_t recordType, std::chrono::milliseconds timestamp,
         record.event.eventRecord.sensorType = sensorIter->second.sensorType;
         record.event.eventRecord.sensorNum = sensorIter->second.sensorID;
 
-        iter = m.find(strEventDir);
-        assert(iter != m.end());
+        iter = data.find(strEventDir);
+        assert(iter != data.end());
         auto eventDir = static_cast<uint8_t>(convert(iter->second));
         uint8_t assert = eventDir ? assertEvent : deassertEvent;
         record.event.eventRecord.eventType =
@@ -164,13 +145,13 @@ void constructSEL(uint8_t recordType, std::chrono::milliseconds timestamp,
     record.event.eventRecord.recordType = recordType;
     record.event.eventRecord.timeStamp = static_cast<uint32_t>(
         std::chrono::duration_cast<std::chrono::seconds>(timestamp).count());
-    iter = m.find(strGenerateId);
-    assert(iter != m.end());
+    iter = data.find(strGenerateId);
+    assert(iter != data.end());
     record.event.eventRecord.generatorID =
         static_cast<uint16_t>(convert(iter->second));
     record.event.eventRecord.eventMsgRevision = eventMsgRevision;
-    iter = m.find(strSensorData);
-    assert(iter != m.end());
+    iter = data.find(strSensorData);
+    assert(iter != data.end());
     auto sensorData = convertVec(iter->second);
     // The remaining 3 bytes are the sensor data
     memcpy(&record.event.eventRecord.eventData1, sensorData.data(),
@@ -225,7 +206,6 @@ GetSELEntryResponse prepareSELEntry(
         std::get<uint64_t>(iterTimeStamp->second));
 
     bool isFromSELLogger = false;
-    additionalDataMap m;
 
     // The recordID are with the same offset between different types,
     // so we are safe to set the recordID here
@@ -238,9 +218,8 @@ GetSELEntryResponse prepareSELEntry(
         // Check if it's a SEL from phosphor-sel-logger which shall contain
         // the record ID, etc
         const auto& addData = std::get<AdditionalData>(iterId->second);
-        m = parseAdditionalData(addData);
-        auto recordTypeIter = m.find(strRecordType);
-        if (recordTypeIter != m.end())
+        auto recordTypeIter = addData.find(strRecordType);
+        if (recordTypeIter != addData.end())
         {
             // It is a SEL from phosphor-sel-logger
             isFromSELLogger = true;
@@ -260,15 +239,18 @@ GetSELEntryResponse prepareSELEntry(
     if (isFromSELLogger)
     {
         // It is expected to be a custom SEL entry
-        auto recordType = static_cast<uint8_t>(convert(m[strRecordType]));
+        const auto& addData = std::get<AdditionalData>(iterId->second);
+        auto recordType =
+            static_cast<uint8_t>(convert(addData.find(strRecordType)->second));
         auto isOEM = isRecordOEM(recordType);
         if (isOEM)
         {
-            constructOEMSEL(recordType, chronoTimeStamp, m, record);
+            constructOEMSEL(recordType, chronoTimeStamp, addData, record);
         }
         else
         {
-            constructSEL(recordType, chronoTimeStamp, m, entryData, record);
+            constructSEL(recordType, chronoTimeStamp, addData, entryData,
+                         record);
         }
     }
     else
@@ -395,8 +377,10 @@ void readLoggingObjectPaths(ObjectPaths& paths)
     auto depth = 0;
     paths.clear();
 
-    auto mapperCall = bus.new_method_call(mapperBusName, mapperObjPath,
-                                          mapperIntf, "GetSubTreePaths");
+    auto mapperCall = bus.new_method_call(
+        ObjectMapper::default_service, ObjectMapper::instance_path,
+        ObjectMapper::interface,
+        ObjectMapper::method_names::get_sub_tree_paths);
     mapperCall.append(logBasePath);
     mapperCall.append(depth);
     mapperCall.append(ObjectPaths({logEntryIntf}));

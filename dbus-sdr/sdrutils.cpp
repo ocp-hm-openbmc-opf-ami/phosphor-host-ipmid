@@ -19,10 +19,21 @@
 #include <ipmid/utils.hpp>
 #include <nlohmann/json.hpp>
 #include <phosphor-logging/lg2.hpp>
+#include <xyz/openbmc_project/ObjectMapper/common.hpp>
+#include <xyz/openbmc_project/Sensor/Threshold/Critical/common.hpp>
+#include <xyz/openbmc_project/Sensor/Threshold/Warning/common.hpp>
+#include <xyz/openbmc_project/Sensor/Value/common.hpp>
 
 #include <fstream>
 #include <optional>
 #include <unordered_set>
+
+using ObjectMapper = sdbusplus::common::xyz::openbmc_project::ObjectMapper;
+using SensorValue = sdbusplus::common::xyz::openbmc_project::sensor::Value;
+using SensorThresholdWarning =
+    sdbusplus::common::xyz::openbmc_project::sensor::threshold::Warning;
+using SensorThresholdCritical =
+    sdbusplus::common::xyz::openbmc_project::sensor::threshold::Critical;
 
 #ifdef FEATURE_HYBRID_SENSORS
 
@@ -50,7 +61,7 @@ boost::container::flat_map<
                                      SensorEventTypeCodes::threshold)},
          {"fan_pwm", std::make_pair(SensorTypeCodes::fan,
                                     SensorEventTypeCodes::threshold)},
-         {"intrusion", std::make_pair(SensorTypeCodes::physical_security,
+         {"intrusion", std::make_pair(SensorTypeCodes::physicalSecurity,
                                       SensorEventTypeCodes::sensorSpecified)},
          {"processor", std::make_pair(SensorTypeCodes::processor,
                                       SensorEventTypeCodes::sensorSpecified)},
@@ -58,7 +69,7 @@ boost::container::flat_map<
                                   SensorEventTypeCodes::threshold)},
          {"memory", std::make_pair(SensorTypeCodes::memory,
                                    SensorEventTypeCodes::sensorSpecified)},
-         {"state", std::make_pair(SensorTypeCodes::power_unit,
+         {"state", std::make_pair(SensorTypeCodes::powerUnit,
                                   SensorEventTypeCodes::sensorSpecified)},
          {"buttons", std::make_pair(SensorTypeCodes::buttons,
                                     SensorEventTypeCodes::sensorSpecified)},
@@ -67,7 +78,9 @@ boost::container::flat_map<
          {"entity", std::make_pair(SensorTypeCodes::entity,
                                    SensorEventTypeCodes::sensorSpecified)},
          {"energy", std::make_pair(SensorTypeCodes::other,
-                                   SensorEventTypeCodes::threshold)}}};
+                                   SensorEventTypeCodes::threshold)},
+         {"utilization", std::make_pair(SensorTypeCodes::other,
+                                        SensorEventTypeCodes::threshold)}}};
 
 namespace details
 {
@@ -139,9 +152,8 @@ uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
     auto lbdUpdateSensorTree = [&dbus](const char* path,
                                        const auto& interfaces) {
         auto mapperCall = dbus->new_method_call(
-            "xyz.openbmc_project.ObjectMapper",
-            "/xyz/openbmc_project/object_mapper",
-            "xyz.openbmc_project.ObjectMapper", "GetSubTree");
+            ObjectMapper::default_service, ObjectMapper::instance_path,
+            ObjectMapper::interface, ObjectMapper::method_names::get_sub_tree);
         SensorSubTree sensorTreePartial;
 
         mapperCall.append(path, depth, interfaces);
@@ -168,10 +180,8 @@ uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
 
     // Add sensors to SensorTree
     static constexpr const std::array sensorInterfaces = {
-        "xyz.openbmc_project.Sensor.Value",
-        "xyz.openbmc_project.Sensor.ValueMutability",
-        "xyz.openbmc_project.Sensor.Threshold.Warning",
-        "xyz.openbmc_project.Sensor.Threshold.Critical"};
+        SensorValue::interface, "xyz.openbmc_project.Sensor.ValueMutability",
+        SensorThresholdWarning::interface, SensorThresholdCritical::interface};
     static constexpr const std::array vrInterfaces = {
         "xyz.openbmc_project.Control.VoltageRegulatorMode"};
 
@@ -185,8 +195,8 @@ uint16_t getSensorSubtree(std::shared_ptr<SensorSubTree>& subtree)
         for (const auto& sensor : ipmi::sensor::sensors)
         {
             // Threshold sensors should not be emplaced in here.
-            if (boost::starts_with(sensor.second.sensorPath,
-                                   "/xyz/openbmc_project/sensors/"))
+            if (sensor.second.sensorPath.starts_with(
+                    "/xyz/openbmc_project/sensors/"))
             {
                 continue;
             }
@@ -392,10 +402,9 @@ std::optional<std::map<std::string, std::vector<std::string>>>
     std::vector<std::string> interfaces;
     std::shared_ptr<sdbusplus::asio::connection> dbus = getSdBus();
 
-    sdbusplus::message_t getObjectMessage =
-        dbus->new_method_call("xyz.openbmc_project.ObjectMapper",
-                              "/xyz/openbmc_project/object_mapper",
-                              "xyz.openbmc_project.ObjectMapper", "GetObject");
+    sdbusplus::message_t getObjectMessage = dbus->new_method_call(
+        ObjectMapper::default_service, ObjectMapper::instance_path,
+        ObjectMapper::interface, ObjectMapper::method_names::get_object);
     getObjectMessage.append(path, interfaces);
 
     try
@@ -449,15 +458,15 @@ std::optional<std::unordered_set<std::string>>& getIpmiDecoratorPaths(
         return ipmiDecoratorPaths;
     }
 
+    using Paths = std::vector<std::string>;
     boost::system::error_code ec;
-    std::vector<std::string> paths =
-        (*ctx)->bus->yield_method_call<std::vector<std::string>>(
-            (*ctx)->yield, ec, "xyz.openbmc_project.ObjectMapper",
-            "/xyz/openbmc_project/object_mapper",
-            "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths", "/",
-            int32_t(0),
-            std::array<const char*, 1>{
-                "xyz.openbmc_project.Inventory.Decorator.Ipmi"});
+    Paths paths = ipmi::callDbusMethod<Paths>(
+        *ctx, ec, ObjectMapper::default_service, ObjectMapper::instance_path,
+        ObjectMapper::interface, ObjectMapper::method_names::get_sub_tree_paths,
+        "/", int32_t(0),
+        std::array<const char*, 1>{
+            "xyz.openbmc_project.Inventory.Decorator.Ipmi"});
+
     if (ec)
     {
         return ipmiDecoratorPaths;
@@ -493,8 +502,7 @@ const std::string* getSensorConfigurationInterface(
 
     for (const auto& entry : entityManagerService->second)
     {
-        if (boost::algorithm::starts_with(entry,
-                                          "xyz.openbmc_project.Configuration."))
+        if (entry.starts_with("xyz.openbmc_project.Configuration."))
         {
             return &entry;
         }

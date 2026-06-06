@@ -10,6 +10,9 @@
 #include <phosphor-logging/elog-errors.hpp>
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/message/types.hpp>
+#include <xyz/openbmc_project/Sensor/Threshold/Critical/common.hpp>
+#include <xyz/openbmc_project/Sensor/Threshold/Warning/common.hpp>
+#include <xyz/openbmc_project/Sensor/Value/common.hpp>
 
 #include <cmath>
 
@@ -39,6 +42,12 @@ using Interfaces = std::vector<Interface>;
 using MapperResponseType = std::map<Path, std::map<Service, Interfaces>>;
 using PropertyMap = ipmi::PropertyMap;
 
+using SensorValue = sdbusplus::common::xyz::openbmc_project::sensor::Value;
+using SensorThresholdWarning =
+    sdbusplus::common::xyz::openbmc_project::sensor::threshold::Warning;
+using SensorThresholdCritical =
+    sdbusplus::common::xyz::openbmc_project::sensor::threshold::Critical;
+
 using namespace phosphor::logging;
 
 /** @brief Make assertion set from input data
@@ -51,7 +60,7 @@ AssertionSet getAssertionSet(const SetSensorReadingReq& cmdData);
  *  @param[in] msg - message to send
  *  @return failure status in IPMI error code
  */
-ipmi_ret_t updateToDbus(IpmiUpdateData& msg);
+ipmi::Cc updateToDbus(IpmiUpdateData& msg);
 
 namespace get
 {
@@ -175,17 +184,26 @@ GetSensorResponse readingAssertion(const Info& sensorInfo)
     sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
     GetSensorResponse response{};
 
-    enableScanning(&response);
+    enableScanning(response);
+    try
+    {
+        auto service = ipmi::getService(bus, sensorInfo.sensorInterface,
+                                        sensorInfo.sensorPath);
+        auto propValue = ipmi::getDbusProperty(
+            bus, service, sensorInfo.sensorPath,
+            sensorInfo.propertyInterfaces.begin()->first,
+            sensorInfo.propertyInterfaces.begin()->second.begin()->first);
 
-    auto service = ipmi::getService(bus, sensorInfo.sensorInterface,
-                                    sensorInfo.sensorPath);
-
-    auto propValue = ipmi::getDbusProperty(
-        bus, service, sensorInfo.sensorPath,
-        sensorInfo.propertyInterfaces.begin()->first,
-        sensorInfo.propertyInterfaces.begin()->second.begin()->first);
-
-    setAssertionBytes(static_cast<uint16_t>(std::get<T>(propValue)), &response);
+        setAssertionBytes(static_cast<uint16_t>(std::get<T>(propValue)),
+                          response);
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error(
+            "Failed to call readingAssertion, path: {PATH}, interface: {INTERFACE}: {ERROR}",
+            "PATH", sensorInfo.sensorPath, "INTERFACE",
+            sensorInfo.sensorInterface, "ERROR", e);
+    }
 
     return response;
 }
@@ -205,15 +223,14 @@ GetSensorResponse readingData(const Info& sensorInfo)
 
     GetSensorResponse response{};
 
-    enableScanning(&response);
+    enableScanning(response);
 
     auto service = ipmi::getService(bus, sensorInfo.sensorInterface,
                                     sensorInfo.sensorPath);
 
 #ifdef UPDATE_FUNCTIONAL_ON_FAIL
     // Check the OperationalStatus interface for functional property
-    if (sensorInfo.propertyInterfaces.begin()->first ==
-        "xyz.openbmc_project.Sensor.Value")
+    if (sensorInfo.propertyInterfaces.begin()->first == SensorValue::interface)
     {
         bool functional = true;
         try
@@ -236,16 +253,29 @@ GetSensorResponse readingData(const Info& sensorInfo)
     }
 #endif
 
-    auto propValue = ipmi::getDbusProperty(
-        bus, service, sensorInfo.sensorPath,
-        sensorInfo.propertyInterfaces.begin()->first,
-        sensorInfo.propertyInterfaces.begin()->second.begin()->first);
+    double value{};
+    try
+    {
+        auto propValue = ipmi::getDbusProperty(
+            bus, service, sensorInfo.sensorPath,
+            sensorInfo.propertyInterfaces.begin()->first,
+            sensorInfo.propertyInterfaces.begin()->second.begin()->first);
 
-    double value = std::get<T>(propValue) *
-                   std::pow(10, sensorInfo.scale - sensorInfo.exponentR);
+        value = std::get<T>(propValue) *
+                std::pow(10, sensorInfo.scale - sensorInfo.exponentR);
+    }
+    catch (const std::exception& e)
+    {
+        lg2::error(
+            "Failed to call readingData, path: {PATH}, interface: {INTERFACE}: {ERROR}",
+            "PATH", sensorInfo.sensorPath, "INTERFACE",
+            sensorInfo.sensorInterface, "ERROR", e);
+        return response;
+    }
+
     int32_t rawData =
         (value - sensorInfo.scaledOffset) / sensorInfo.coefficientM;
-
+    constexpr uint8_t reserved_bits_7_6 = 0xC0; // bits[7:6] = 11b (reserved)
     constexpr uint8_t sensorUnitsSignedBits = 2 << 6;
     constexpr uint8_t signedDataFormat = 0x80;
     // if sensorUnits1 [7:6] = 10b, sensor is signed
@@ -262,7 +292,7 @@ GetSensorResponse readingData(const Info& sensorInfo)
         maxClamp = std::numeric_limits<uint8_t>::max();
     }
     setReading(static_cast<uint8_t>(std::clamp(rawData, minClamp, maxClamp)),
-               &response);
+               response);
 
     if (!std::isfinite(value))
     {
@@ -274,8 +304,8 @@ GetSensorResponse readingData(const Info& sensorInfo)
     {
         critAlarmHigh = std::get<bool>(ipmi::getDbusProperty(
             bus, service, sensorInfo.sensorPath,
-            "xyz.openbmc_project.Sensor.Threshold.Critical",
-            "CriticalAlarmHigh"));
+            SensorThresholdCritical::interface,
+            SensorThresholdCritical::property_names::critical_alarm_high));
     }
     catch (const std::exception& e)
     {
@@ -286,8 +316,8 @@ GetSensorResponse readingData(const Info& sensorInfo)
     {
         critAlarmLow = std::get<bool>(ipmi::getDbusProperty(
             bus, service, sensorInfo.sensorPath,
-            "xyz.openbmc_project.Sensor.Threshold.Critical",
-            "CriticalAlarmLow"));
+            SensorThresholdCritical::interface,
+            SensorThresholdCritical::property_names::critical_alarm_low));
     }
     catch (const std::exception& e)
     {
@@ -298,8 +328,8 @@ GetSensorResponse readingData(const Info& sensorInfo)
     {
         warningAlarmHigh = std::get<bool>(ipmi::getDbusProperty(
             bus, service, sensorInfo.sensorPath,
-            "xyz.openbmc_project.Sensor.Threshold.Warning",
-            "WarningAlarmHigh"));
+            SensorThresholdWarning::interface,
+            SensorThresholdWarning::property_names::warning_alarm_high));
     }
     catch (const std::exception& e)
     {
@@ -310,21 +340,20 @@ GetSensorResponse readingData(const Info& sensorInfo)
     {
         warningAlarmLow = std::get<bool>(ipmi::getDbusProperty(
             bus, service, sensorInfo.sensorPath,
-            "xyz.openbmc_project.Sensor.Threshold.Warning", "WarningAlarmLow"));
+            SensorThresholdWarning::interface,
+            SensorThresholdWarning::property_names::warning_alarm_low));
     }
     catch (const std::exception& e)
     {
         warningAlarmLow = false;
     }
     response.thresholdLevelsStates =
-        (static_cast<uint8_t>(critAlarmHigh) << 3) |
-        (static_cast<uint8_t>(critAlarmLow) << 2) |
-        (static_cast<uint8_t>(warningAlarmHigh) << 1) |
-        (static_cast<uint8_t>(warningAlarmLow));
-
+        reserved_bits_7_6 | (static_cast<uint8_t>(critAlarmHigh) << 4) |
+        (static_cast<uint8_t>(warningAlarmHigh) << 3) |
+        (static_cast<uint8_t>(critAlarmLow) << 1) |
+        (static_cast<uint8_t>(warningAlarmLow) << 0);
     return response;
 }
-
 #else
 
 /**
@@ -369,7 +398,7 @@ std::optional<GetSensorResponse> readingAssertion(
     uint8_t id, const Info& sensorInfo, const PropertyMap& properties)
 {
     GetSensorResponse response{};
-    enableScanning(&response);
+    enableScanning(response);
 
     auto iter = properties.find(
         sensorInfo.propertyInterfaces.begin()->second.begin()->first);
@@ -379,7 +408,7 @@ std::optional<GetSensorResponse> readingAssertion(
     }
 
     setAssertionBytes(static_cast<uint16_t>(std::get<T>(iter->second)),
-                      &response);
+                      response);
 
     if (!sensorCacheMap[id].has_value())
     {
@@ -424,7 +453,7 @@ std::optional<GetSensorResponse> readingData(uint8_t id, const Info& sensorInfo,
 
     GetSensorResponse response{};
 
-    enableScanning(&response);
+    enableScanning(response);
 
     iter = properties.find(
         sensorInfo.propertyInterfaces.begin()->second.begin()->first);
@@ -449,7 +478,7 @@ std::optional<GetSensorResponse> readingData(uint8_t id, const Info& sensorInfo,
             lg2::error("Value out of range");
             throw std::out_of_range("Value out of range");
         }
-        setReading(static_cast<int8_t>(rawData), &response);
+        setReading(static_cast<int8_t>(rawData), response);
     }
     else
     {
@@ -459,7 +488,7 @@ std::optional<GetSensorResponse> readingData(uint8_t id, const Info& sensorInfo,
             lg2::error("Value out of range");
             throw std::out_of_range("Value out of range");
         }
-        setReading(static_cast<uint8_t>(rawData), &response);
+        setReading(static_cast<uint8_t>(rawData), response);
     }
 
     if (!std::isfinite(value))
@@ -500,8 +529,7 @@ IpmiUpdateData makeDbusMsg(const std::string& updateInterface,
  *  @param[in] sensorInfo - sensor d-bus info
  *  @return a IPMI error code
  */
-ipmi_ret_t assertion(const SetSensorReadingReq& cmdData,
-                     const Info& sensorInfo);
+ipmi::Cc assertion(const SetSensorReadingReq& cmdData, const Info& sensorInfo);
 
 /** @brief Update d-bus based on a reading assertion
  *  @tparam T - type of d-bus property mapping this sensor
@@ -510,8 +538,8 @@ ipmi_ret_t assertion(const SetSensorReadingReq& cmdData,
  *  @return a IPMI error code
  */
 template <typename T>
-ipmi_ret_t readingAssertion(const SetSensorReadingReq& cmdData,
-                            const Info& sensorInfo)
+ipmi::Cc readingAssertion(const SetSensorReadingReq& cmdData,
+                          const Info& sensorInfo)
 {
     auto msg =
         makeDbusMsg("org.freedesktop.DBus.Properties", sensorInfo.sensorPath,
@@ -535,8 +563,7 @@ ipmi_ret_t readingAssertion(const SetSensorReadingReq& cmdData,
  *  @return an IPMI error code
  */
 template <typename T>
-ipmi_ret_t readingData(const SetSensorReadingReq& cmdData,
-                       const Info& sensorInfo)
+ipmi::Cc readingData(const SetSensorReadingReq& cmdData, const Info& sensorInfo)
 {
     T raw_value = (sensorInfo.coefficientM * cmdData.reading) +
                   sensorInfo.scaledOffset;
@@ -564,16 +591,16 @@ ipmi_ret_t readingData(const SetSensorReadingReq& cmdData,
  *  @param[in] sensorInfo - sensor d-bus info
  *  @return a IPMI error code
  */
-ipmi_ret_t eventdata(const SetSensorReadingReq& cmdData, const Info& sensorInfo,
-                     uint8_t data);
+ipmi::Cc eventdata(const SetSensorReadingReq& cmdData, const Info& sensorInfo,
+                   uint8_t data);
 
 /** @brief Update d-bus based on eventdata1 type sensor data
  *  @param[in] cmdData - input sensor data
  *  @param[in] sensorInfo - sensor d-bus info
  *  @return a IPMI error code
  */
-inline ipmi_ret_t eventdata1(const SetSensorReadingReq& cmdData,
-                             const Info& sensorInfo)
+inline ipmi::Cc eventdata1(const SetSensorReadingReq& cmdData,
+                           const Info& sensorInfo)
 {
     return eventdata(cmdData, sensorInfo, cmdData.eventData1);
 }
@@ -583,8 +610,8 @@ inline ipmi_ret_t eventdata1(const SetSensorReadingReq& cmdData,
  *  @param[in] sensorInfo - sensor d-bus info
  *  @return a IPMI error code
  */
-inline ipmi_ret_t eventdata2(const SetSensorReadingReq& cmdData,
-                             const Info& sensorInfo)
+inline ipmi::Cc eventdata2(const SetSensorReadingReq& cmdData,
+                           const Info& sensorInfo)
 {
     return eventdata(cmdData, sensorInfo, cmdData.eventData2);
 }
@@ -594,8 +621,8 @@ inline ipmi_ret_t eventdata2(const SetSensorReadingReq& cmdData,
  *  @param[in] sensorInfo - sensor d-bus info
  *  @return a IPMI error code
  */
-inline ipmi_ret_t eventdata3(const SetSensorReadingReq& cmdData,
-                             const Info& sensorInfo)
+inline ipmi::Cc eventdata3(const SetSensorReadingReq& cmdData,
+                           const Info& sensorInfo)
 {
     return eventdata(cmdData, sensorInfo, cmdData.eventData3);
 }
@@ -623,8 +650,7 @@ IpmiUpdateData makeDbusMsg(const std::string& updateInterface,
  *  @param[in] sensorInfo - sensor d-bus info
  *  @return a IPMI error code
  */
-ipmi_ret_t assertion(const SetSensorReadingReq& cmdData,
-                     const Info& sensorInfo);
+ipmi::Cc assertion(const SetSensorReadingReq& cmdData, const Info& sensorInfo);
 
 } // namespace notify
 

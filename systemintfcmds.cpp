@@ -15,7 +15,8 @@
 #include <bitset>
 #include <cstring>
 #include <fstream>
-void register_netfn_app_functions() __attribute__((constructor));
+
+void registerNetFnAppFunctions() __attribute__((constructor));
 
 /*D-bus details for BMC Global enable */
 static constexpr const char* settingService = "xyz.openbmc_project.Settings";
@@ -283,7 +284,7 @@ std::unique_ptr<sdbusplus::server::manager_t> objManager
     __attribute__((init_priority(101)));
 } // namespace
 
-void register_netfn_app_functions()
+void registerNetFnAppFunctions()
 {
     // <Read Event Message Buffer>
     ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnApp,

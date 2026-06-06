@@ -1,7 +1,5 @@
 #include "config.h"
 
-#include "storagehandler.hpp"
-
 #include "fruread.hpp"
 #include "read_fru_data.hpp"
 #include "selutility.hpp"
@@ -30,7 +28,7 @@
 #include <string>
 #include <variant>
 
-void register_netfn_storage_functions() __attribute__((constructor));
+void registerNetFnStorageFunctions() __attribute__((constructor));
 
 unsigned int g_sel_time = 0xFFFFFFFF;
 static bool SelTimeUnspecifiedState = false;
@@ -285,25 +283,17 @@ ipmi::RspType<uint8_t,  // SEL revision.
         ipmi::sel::operationSupport::overflow);
 }
 
-ipmi_ret_t getSELEntry(ipmi_netfn_t, ipmi_cmd_t, ipmi_request_t request,
-                       ipmi_response_t response, ipmi_data_len_t data_len,
-                       ipmi_context_t)
+ipmi::RspType<uint16_t,            // Next Record ID
+              std::vector<uint8_t> // SEL data
+              >
+    getSELEntry(uint16_t reservationID, uint16_t selRecordID, uint8_t offset,
+                uint8_t readLength)
 {
-    if (*data_len != sizeof(ipmi::sel::GetSELEntryRequest))
+    if (reservationID != 0)
     {
-        *data_len = 0;
-        return IPMI_CC_REQ_DATA_LEN_INVALID;
-    }
-
-    auto requestData =
-        reinterpret_cast<const ipmi::sel::GetSELEntryRequest*>(request);
-
-    if (requestData->reservationID != 0)
-    {
-        if (!checkSELReservation(requestData->reservationID))
+        if (!checkSELReservation(reservationID))
         {
-            *data_len = 0;
-            return IPMI_CC_INVALID_RESERVATION_ID;
+            return ipmi::responseInvalidReservationId();
         }
     }
 
@@ -315,18 +305,17 @@ ipmi_ret_t getSELEntry(ipmi_netfn_t, ipmi_cmd_t, ipmi_request_t request,
 
     if (selCacheMap.empty())
     {
-        *data_len = 0;
-        return IPMI_CC_SENSOR_INVALID;
+        return ipmi::responseSensorInvalid();
     }
 
     SELCacheMap::const_iterator iter;
 
     // Check for the requested SEL Entry.
-    if (requestData->selRecordID == ipmi::sel::firstEntry)
+    if (selRecordID == ipmi::sel::firstEntry)
     {
         iter = selCacheMap.begin();
     }
-    else if (requestData->selRecordID == ipmi::sel::lastEntry)
+    else if (selRecordID == ipmi::sel::lastEntry)
     {
         if (selCacheMap.size() > 1)
         {
@@ -341,11 +330,10 @@ ipmi_ret_t getSELEntry(ipmi_netfn_t, ipmi_cmd_t, ipmi_request_t request,
     }
     else
     {
-        iter = selCacheMap.find(requestData->selRecordID);
+        iter = selCacheMap.find(selRecordID);
         if (iter == selCacheMap.end())
         {
-            *data_len = 0;
-            return IPMI_CC_SENSOR_INVALID;
+            return ipmi::responseSensorInvalid();
         }
     }
 
@@ -361,49 +349,32 @@ ipmi_ret_t getSELEntry(ipmi_netfn_t, ipmi_cmd_t, ipmi_request_t request,
         record.nextRecordID = iter->first;
     }
 
-    if (requestData->readLength == ipmi::sel::entireRecord)
+    uint16_t nextRecordID = record.nextRecordID;
+    std::vector<uint8_t> buffer;
+    if (readLength == ipmi::sel::entireRecord)
     {
-        std::memcpy(response, &record, sizeof(record));
-        *data_len = sizeof(record);
+        buffer.resize(sizeof(record));
+        std::memcpy(buffer.data(), &record.event, sizeof(record.event));
     }
     else
     {
-        if (requestData->offset >= ipmi::sel::selRecordSize ||
-            requestData->readLength > ipmi::sel::selRecordSize)
+        if (offset >= ipmi::sel::selRecordSize ||
+            readLength > ipmi::sel::selRecordSize)
         {
-            *data_len = 0;
-            return IPMI_CC_INVALID_FIELD_REQUEST;
+            return ipmi::responseInvalidFieldRequest();
         }
 
-        auto diff = ipmi::sel::selRecordSize - requestData->offset;
-        auto readLength = std::min<size_t>(diff, requestData->readLength);
-        int RetVal = 0;
+        auto diff = ipmi::sel::selRecordSize - offset;
+        auto minReadLength = std::min(diff, static_cast<int>(readLength));
 
-        RetVal = snprintf(reinterpret_cast<char*>(response),
-                          sizeof(record.nextRecordID), "%u",
-                          record.nextRecordID);
-        if (RetVal < 0 ||
-            RetVal >= static_cast<int>(sizeof(record.nextRecordID)))
-        {
-            std::printf("Buffer Overflow\n");
-            return IPMI_CC_UNSPECIFIED_ERROR;
-        }
-
-        RetVal = snprintf(
-            reinterpret_cast<char*>(response) + sizeof(record.nextRecordID),
-            readLength, "%s",
-            reinterpret_cast<const char*>(&record.event.eventRecord.recordID) +
-                requestData->offset);
-        if (RetVal < 0 || RetVal >= static_cast<int>(readLength))
-        {
-            std::printf("Buffer Overflow\n");
-            return IPMI_CC_UNSPECIFIED_ERROR;
-        }
-
-        *data_len = sizeof(record.nextRecordID) + readLength;
+        buffer.resize(minReadLength);
+        const ipmi::sel::SELEventRecordFormat* evt = &record.event;
+        std::memcpy(buffer.data(),
+                    reinterpret_cast<const uint8_t*>(evt) + offset,
+                    minReadLength);
     }
 
-    return IPMI_CC_OK;
+    return ipmi::responseSuccess(nextRecordID, buffer);
 }
 
 /** @brief implements the delete SEL entry command
@@ -764,15 +735,18 @@ ipmi::RspType<uint16_t // recordID of the Added SEL entry
               >
     ipmiStorageAddSEL(uint16_t recordID, uint8_t recordType,
                       [[maybe_unused]] uint32_t timeStamp, uint16_t generatorID,
-                      [[maybe_unused]] uint8_t evmRev, uint8_t sensorType,
-                      uint8_t sensorNumber, uint8_t eventDir,
+                      [[maybe_unused]] uint8_t evmRev,
+                      [[maybe_unused]] uint8_t sensorType, uint8_t sensorNumber,
+                      uint8_t eventDir,
                       std::array<uint8_t, eventDataSize> eventData)
 {
     std::string objpath;
     static constexpr auto systemRecordType = 0x02;
+#ifdef OPEN_POWER_SUPPORT
     // Hostboot sends SEL with OEM record type 0xDE to indicate that there is
     // a maintenance procedure associated with eSEL record.
     static constexpr auto procedureType = 0xDE;
+#endif
     cancelSELReservation();
     if (recordType == systemRecordType)
     {
@@ -959,12 +933,12 @@ ipmi::RspType<uint8_t,  // SDR version
                                  operationSupport);
 }
 
-void register_netfn_storage_functions()
+void registerNetFnStorageFunctions()
 {
     selCacheMapInitialized = false;
     initSELCache();
     // Handlers with dbus-sdr handler implementation.
-    // Do not register the hander if it dynamic sensors stack is used.
+    // Do not register the handler if it dynamic sensors stack is used.
 
 #ifndef FEATURE_DYNAMIC_SENSORS
 
@@ -981,8 +955,9 @@ void register_netfn_storage_functions()
                           ipmiStorageGetSelTimeUtcOffset);
 
     // <Get SEL Entry>
-    ipmi_register_callback(NETFUN_STORAGE, IPMI_CMD_GET_SEL_ENTRY, NULL,
-                           getSELEntry, PRIVILEGE_USER);
+    ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnStorage,
+                          ipmi::storage::cmdGetSelEntry, ipmi::Privilege::User,
+                          getSELEntry);
 
     // <Delete SEL Entry>
     ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnStorage,
@@ -1022,12 +997,13 @@ void register_netfn_storage_functions()
                           ipmi::Privilege::User, ipmiSensorReserveSdr);
 
     // <Get SDR>
-    ipmi_register_callback(NETFUN_STORAGE, IPMI_CMD_GET_SDR, nullptr,
-                           ipmi_sen_get_sdr, PRIVILEGE_USER);
+    ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnStorage,
+                          ipmi::storage::cmdGetSdr, ipmi::Privilege::User,
+                          ipmiSensorGetSdr);
 
 #endif
 
-    // Common Handers used by both implementation.
+    // Common Handlers used by both implementation.
 
     // <Reserve SEL>
     ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnStorage,

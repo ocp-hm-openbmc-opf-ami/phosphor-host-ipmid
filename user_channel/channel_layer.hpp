@@ -27,8 +27,19 @@ namespace ipmi
 static constexpr uint8_t maxIpmiChannels = 16;
 static constexpr uint8_t currentChNum = 0xE;
 static constexpr uint8_t invalidChannel = 0xff;
-static constexpr const uint8_t ccActionNotSupportedForChannel = 0x82;
-static constexpr const uint8_t ccAccessModeNotSupportedForChannel = 0x83;
+
+constexpr Cc ccActionNotSupportedForChannel = 0x82;
+constexpr Cc ccAccessModeNotSupportedForChannel = 0x83;
+
+static inline auto responseActionNotSupportedForChannel()
+{
+    return response(ccActionNotSupportedForChannel);
+}
+
+static inline auto responseAccessModeNotSupportedForChannel()
+{
+    return response(ccAccessModeNotSupportedForChannel);
+}
 
 /**
  * @array of privilege levels
@@ -107,7 +118,7 @@ enum class EAuthType : uint8_t
     none = (1 << 0x0),
     md2 = (1 << 0x1),
     md5 = (1 << 0x2),
-    reserved = (1 << 0x3),
+    reserved = (1 << 0x3) | (1 << 0x6) | (1 << 0x7),
     straightPasswd = (1 << 0x4),
     oem = (1 << 0x5),
 };
