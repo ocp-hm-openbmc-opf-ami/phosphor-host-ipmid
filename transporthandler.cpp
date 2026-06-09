@@ -255,6 +255,10 @@ const std::unordered_set<IP::AddressOrigin> originsV4 = {
     IP::AddressOrigin::DHCP,
 };
 
+const std::unordered_set<IP::AddressOrigin> originsV4Dynamic = {
+    IP::AddressOrigin::DHCP,
+};
+
 static constexpr uint8_t oemCmdStart = 192;
 static constexpr uint8_t InteloemCmdStart = 199;
 bool IsDHCP = false;
@@ -466,13 +470,13 @@ void createIfAddr(sdbusplus::bus_t& bus, const ChannelParams& params,
                   typename AddrFamily<family>::addr address, uint8_t prefix,
                   uint8_t index = 0)
 {
-    auto newreq =
-        bus.new_method_call(params.service.c_str(), params.logicalPath.c_str(),
-                            INTF_IP_CREATE, "IPWithIndex");
     std::string protocol =
         sdbusplus::common::xyz::openbmc_project::network::convertForMessage(
             AddrFamily<family>::protocol);
     stdplus::ToStrHandle<stdplus::ToStr<typename AddrFamily<family>::addr>> tsh;
+    auto newreq = bus.new_method_call(params.service.c_str(),
+                                      params.logicalPath.c_str(),
+                                      INTF_IP_CREATE, "IPWithIndex");
     newreq.append(protocol, tsh(address), prefix, index, "");
     bus.call_noreply(newreq);
 }
@@ -520,8 +524,11 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
     }
     else if (address)
     {
+	auto dynCount = getIfAddrNum<AF_INET>(bus, params, originsV4Dynamic);
+        auto createIdx =
+            static_cast<uint8_t>(dynCount > 0 ? dynCount : 0);
         createIfAddr<AF_INET>(bus, params, address.value_or(ifaddr->address),
-                              prefix.value_or(fallbackPrefix));
+                              prefix.value_or(fallbackPrefix), createIdx);
     }
 }
 
@@ -2067,7 +2074,14 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseInvalidFieldRequest();
             }
-            channelCall<reconfigureIfAddr4>(channel, ip, std::nullopt);
+            try
+            {
+                channelCall<reconfigureIfAddr4>(channel, ip, std::nullopt);
+            }
+            catch (const std::exception& e)
+            {
+                return responseInvalidFieldRequest();
+            }  
             return responseSuccess();
         }
         case LanParam::IPSrc:

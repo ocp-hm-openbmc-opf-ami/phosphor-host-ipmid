@@ -310,6 +310,10 @@ std::optional<IfAddr<family>> findIfAddr(
         origins,
     ObjectLookupCache& ips)
 {
+    const uint8_t requestedIdx = idx;
+    uint8_t sequentialIdx = idx;
+    const bool requireExactIdx =
+        (family == AF_INET6) && (origins == originsV6Static);
     for (const auto& [path, properties] : ips)
     {
         try
@@ -327,9 +331,39 @@ std::optional<IfAddr<family>> findIfAddr(
                 continue;
             }
 
-            if (idx > 0)
+            auto idxIt = properties.find("Idx");
+            if (idxIt != properties.end())
             {
-                idx--;
+                try
+                {
+                    auto objectIdx = std::get<uint8_t>(idxIt->second);
+                    if (objectIdx == requestedIdx)
+                    {
+                        IfAddr<family> ifaddr;
+                        ifaddr.path = path;
+                        ifaddr.address = addr;
+                        ifaddr.prefix =
+                            std::get<uint8_t>(properties.at("PrefixLength"));
+                        ifaddr.origin = origin;
+                        return ifaddr;
+                    }
+                    if (requireExactIdx)
+                    {
+                        continue;
+                    }
+                }
+                catch (...)
+                {
+                    // Fall through to sequential lookup if Idx type is not
+                }
+            }
+            if (requireExactIdx)
+            {
+                continue;
+            }
+            if (sequentialIdx > 0)
+            {
+                sequentialIdx--;
                 continue;
             }
 
