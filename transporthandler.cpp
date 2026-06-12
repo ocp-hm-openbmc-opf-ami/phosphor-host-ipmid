@@ -22,11 +22,7 @@
 #include <variant>
 #include <vector>
 
-using phosphor::logging::commit;
 using phosphor::logging::elog;
-using phosphor::logging::entry;
-using phosphor::logging::level;
-using phosphor::logging::log;
 using sdbusplus::error::xyz::openbmc_project::common::InternalFailure;
 using sdbusplus::error::xyz::openbmc_project::common::InvalidArgument;
 using sdbusplus::server::xyz::openbmc_project::network::ARPControl;
@@ -41,8 +37,8 @@ using InterfaceMap = std::map<std::string, PropertyMap>;
 using ManagedObjectsMap =
     std::map<sdbusplus::message::object_path, InterfaceMap>;
 
-constexpr uint8_t Max_Communitystr_Length = 18;
-constexpr uint8_t Max_Lan_DestType = 15;
+constexpr uint8_t maxCommunityStrLength = 18;
+constexpr uint8_t maxLanDestType = 15;
 constexpr const char* netService = "xyz.openbmc_project.Network";
 constexpr const char* lanObjPath = "/xyz/openbmc_project/network/eth0";
 constexpr const char* service = "xyz.openbmc_project.Snmp.Conf";
@@ -56,6 +52,15 @@ constexpr const char* configFilePath =
     "/var/lib/pef-alert-manager/pef-lan-param-config.json";
 
 constexpr bool debug = false;
+
+constexpr size_t authEnablesCount = 5;
+
+struct ChannelConfigData
+{
+    std::array<uint8_t, authEnablesCount> authEnables;
+};
+
+std::map<uint8_t, ChannelConfigData> channelConfig;
 
 void updateJsonFile(const std::string& configFilePath,
                     const std::string& communityString)
@@ -249,6 +254,32 @@ namespace ipmi
 namespace transport
 {
 
+// LAN Handler specific response codes
+constexpr Cc ccParamNotSupported = 0x80;
+constexpr Cc ccParamSetLocked = 0x81;
+constexpr Cc ccParamReadOnly = 0x82;
+constexpr Cc ccWriteReadParameter = 0x82;
+
+static inline auto responseParamNotSupported()
+{
+    return response(ccParamNotSupported);
+}
+
+static inline auto responseParamSetLocked()
+{
+    return response(ccParamSetLocked);
+}
+
+static inline auto responseParamReadOnly()
+{
+    return response(ccParamReadOnly);
+}
+
+static inline auto responseWriteReadParameter()
+{
+    return response(ccWriteReadParameter);
+}
+
 /** @brief Valid address origins for IPv4 */
 const std::unordered_set<IP::AddressOrigin> originsV4 = {
     IP::AddressOrigin::Static,
@@ -261,12 +292,6 @@ const std::unordered_set<IP::AddressOrigin> originsV4Dynamic = {
 
 static constexpr uint8_t oemCmdStart = 192;
 static constexpr uint8_t InteloemCmdStart = 199;
-bool IsDHCP = false;
-
-// IPMI completion codes for LAN/SOL configuration parameter commands
-static constexpr ipmi::Cc ccParamNotSupported = 0x80;
-static constexpr ipmi::Cc ccParamSetLocked = 0x81;
-static constexpr ipmi::Cc ccParamReadOnly = 0x82;
 
 static std::unordered_map<uint8_t, uint16_t> lastEnabledVlan;
 
@@ -279,7 +304,9 @@ bool ifnameInPath(std::string_view ifname, std::string_view path)
     constexpr auto rs = PATH_ROOT.size() + 1; // ROOT + separator
     const auto is = rs + ifname.size();       // ROOT + sep + ifname
     return path.size() > rs && path.substr(rs).starts_with(ifname) &&
-           (path.size() == is || path[is] == '/' || path[is] == '_');
+           (path.size() == is || path[is] == '/' ||
+            path[is] == '_'); // handle VLAN IF uses '_' e.g.
+                              // /xyz/openbmc_project/network/eth0_2
 }
 
 std::optional<ChannelParams> maybeGetChannelParams(sdbusplus::bus_t& bus,
@@ -365,28 +392,6 @@ ChannelParams getChannelParams(sdbusplus::bus_t& bus, uint8_t channel)
     return std::move(*params);
 }
 
-/** @brief Wraps the phosphor logging method to insert some additional metadata
- *
- *  @param[in] params - The parameters for the channel
- *  ...
- */
-template <auto level, typename... Args>
-auto logWithChannel(const ChannelParams& params, Args&&... args)
-{
-    return log<level>(std::forward<Args>(args)...,
-                      entry("CHANNEL=%d", params.id),
-                      entry("IFNAME=%s", params.ifname.c_str()));
-}
-template <auto level, typename... Args>
-auto logWithChannel(const std::optional<ChannelParams>& params, Args&&... args)
-{
-    if (params)
-    {
-        return logWithChannel<level>(*params, std::forward<Args>(args)...);
-    }
-    return log<level>(std::forward<Args>(args)...);
-}
-
 /** @brief Get / Set the Property value from phosphor-networkd EthernetInterface
  */
 template <typename T>
@@ -427,8 +432,9 @@ stdplus::EtherAddr getMACProperty(sdbusplus::bus_t& bus,
 void setMACProperty(sdbusplus::bus_t& bus, const ChannelParams& params,
                     stdplus::EtherAddr mac)
 {
+    std::string macStr = stdplus::toStr(mac);
     setDbusProperty(bus, params.service, params.ifPath, INTF_MAC, "MACAddress",
-                    stdplus::toStr(mac));
+                    macStr);
 }
 
 void deleteObjectIfExists(sdbusplus::bus_t& bus, const std::string& service,
@@ -446,9 +452,12 @@ void deleteObjectIfExists(sdbusplus::bus_t& bus, const std::string& service,
     }
     catch (const sdbusplus::exception_t& e)
     {
+        // handle Delete Interface DBus errors
         if (strcmp(e.name(),
                    "xyz.openbmc_project.Common.Error.InternalFailure") != 0 &&
-            strcmp(e.name(), "org.freedesktop.DBus.Error.UnknownObject") != 0)
+            strcmp(e.name(), "org.freedesktop.DBus.Error.UnknownObject") != 0 &&
+            strcmp(e.name(), "xyz.openbmc_project.Common.Error.NotAllowed") !=
+                0)
         {
             // We want to rethrow real errors
             throw;
@@ -474,9 +483,9 @@ void createIfAddr(sdbusplus::bus_t& bus, const ChannelParams& params,
         sdbusplus::common::xyz::openbmc_project::network::convertForMessage(
             AddrFamily<family>::protocol);
     stdplus::ToStrHandle<stdplus::ToStr<typename AddrFamily<family>::addr>> tsh;
-    auto newreq = bus.new_method_call(params.service.c_str(),
-                                      params.logicalPath.c_str(),
-                                      INTF_IP_CREATE, "IPWithIndex");
+    auto newreq =
+        bus.new_method_call(params.service.c_str(), params.logicalPath.c_str(),
+                            INTF_IP_CREATE, "IPWithIndex");
     newreq.append(protocol, tsh(address), prefix, index, "");
     bus.call_noreply(newreq);
 }
@@ -489,7 +498,36 @@ void createIfAddr(sdbusplus::bus_t& bus, const ChannelParams& params,
  */
 auto getIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params)
 {
-    return getIfAddr<AF_INET>(bus, params, 0, originsV4);
+    std::optional<IfAddr<AF_INET>> ifaddr4 = std::nullopt;
+    IP::AddressOrigin src;
+
+    try
+    {
+        src = std::get<bool>(
+                  getDbusProperty(bus, params.service, params.logicalPath,
+                                  INTF_ETHERNET, "DHCP4"))
+                  ? IP::AddressOrigin::DHCP
+                  : IP::AddressOrigin::Static;
+    }
+    catch (const sdbusplus::exception_t& e)
+    {
+        lg2::error("Failed to get IPv4 source");
+        return ifaddr4;
+    }
+
+    for (uint8_t i = 0; i < MAX_IPV4_ADDRESSES; ++i)
+    {
+        ifaddr4 = getIfAddr<AF_INET>(bus, params, i, originsV4);
+        if (ifaddr4 && src == ifaddr4->origin)
+        {
+            break;
+        }
+        else
+        {
+            ifaddr4 = std::nullopt;
+        }
+    }
+    return ifaddr4;
 }
 
 /** @brief Reconfigures the IPv4 address info configured for the interface
@@ -504,29 +542,54 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
                         std::optional<uint8_t> prefix)
 {
     auto ifaddr = getIfAddr4(bus, params);
-    if (stdplus::toStr(ifaddr->address).empty() &&
-        stdplus::toStr(*address).empty())
+    if (!ifaddr && !address)
     {
+        try
+        {
+            auto isDhcp = std::get<bool>(
+                getDbusProperty(bus, params.service, params.logicalPath,
+                                INTF_ETHERNET, "DHCP4"));
+            if (isDhcp)
+            {
+                return;
+            }
+        }
+        catch (const std::exception& e)
+        {
+            lg2::debug("Could not check DHCP4 state: {ERR}", "ERR", e.what());
+        }
         lg2::error("Missing address for IPv4 assignment");
         elog<InternalFailure>();
     }
+
     uint8_t fallbackPrefix = AddrFamily<AF_INET>::defaultPrefix;
     if (ifaddr)
     {
         fallbackPrefix = ifaddr->prefix;
         deleteObjectIfExists(bus, params.service, ifaddr->path);
-        if (!IsDHCP)
+        try
         {
-            createIfAddr<AF_INET>(bus, params,
-                                  address.value_or(ifaddr->address),
-                                  prefix.value_or(fallbackPrefix));
+            auto isDhcp = std::get<bool>(
+                getDbusProperty(bus, params.service, params.logicalPath,
+                                INTF_ETHERNET, "DHCP4"));
+            if (!isDhcp)
+            {
+                createIfAddr<AF_INET>(bus, params,
+                                      address.value_or(ifaddr->address),
+                                      prefix.value_or(fallbackPrefix));
+            }
+        }
+        catch (const std::exception& e)
+        {
+            lg2::error("Failed to check DHCP4 or create address: {ERR}", "ERR",
+                       e.what());
+            elog<InternalFailure>();
         }
     }
     else if (address)
     {
-	auto dynCount = getIfAddrNum<AF_INET>(bus, params, originsV4Dynamic);
-        auto createIdx =
-            static_cast<uint8_t>(dynCount > 0 ? dynCount : 0);
+        auto dynCount = getIfAddrNum<AF_INET>(bus, params, originsV4Dynamic);
+        auto createIdx = static_cast<uint8_t>(dynCount > 0 ? dynCount : 0);
         createIfAddr<AF_INET>(bus, params, address.value_or(ifaddr->address),
                               prefix.value_or(fallbackPrefix), createIdx);
     }
@@ -589,7 +652,7 @@ void reconfigureGatewayPrefixLength(
     auto oldStaticAddr = getStaticRtrAddr<family>(bus, params, Property);
     if (oldStaticAddr.empty())
     {
-        log<level::ERR>("Tried to set Gateway MAC without Gateway");
+        lg2::error("Tried to set Gateway MAC without Gateway");
         elog<InternalFailure>();
     }
 
@@ -831,8 +894,9 @@ uint16_t getVLANProperty(sdbusplus::bus_t& bus, const ChannelParams& params)
 
     if ((vlan & VLAN_VALUE_MASK) != vlan)
     {
-        logWithChannel<level::ERR>(params, "networkd returned an invalid vlan",
-                                   entry("VLAN=%" PRIu32, vlan));
+        lg2::error("networkd returned an invalid vlan: {VLAN} "
+                   "(CH={CHANNEL}, IF={IFNAME})",
+                   "CHANNEL", params.id, "IFNAME", params.ifname, "VLAN", vlan);
         elog<InternalFailure>();
     }
     return vlan;
@@ -868,11 +932,11 @@ uint16_t getVLANPriority(sdbusplus::bus::bus& bus, const ChannelParams& params)
  *
  *  @param[in] bus    - The bus object used for lookups
  *  @param[in] params - The parameters for the channel
- *  @param[in] vlan_priority - The priority for VLAN
+ *  @param[in] vlanPriority - The priority for VLAN
  *  @return 1 if VLAN available else 0
  */
 uint16_t setVLANPriority(sdbusplus::bus::bus& bus, const ChannelParams& params,
-                         uint32_t vlan_priority)
+                         uint32_t vlanPriority)
 {
     // VLAN devices will always have a separate logical object
     if (params.ifPath == params.logicalPath)
@@ -883,7 +947,7 @@ uint16_t setVLANPriority(sdbusplus::bus::bus& bus, const ChannelParams& params,
     try
     {
         setDbusProperty(bus, params.service, params.logicalPath, INTF_VLAN,
-                        "Priority", vlan_priority);
+                        "Priority", vlanPriority);
     }
     catch (const sdbusplus::exception::SdBusError& e)
     {
@@ -952,8 +1016,9 @@ void deleteVLAN(sdbusplus::bus::bus& bus, ChannelParams& params, uint16_t vlan)
     }
     catch (const std::exception& e)
     {
-        logWithChannel<level::ERR>(params, "Invalid vlanID",
-                                   entry("VLAN=%", vlan));
+        lg2::error("Invalid vlanID: {VLAN} "
+                   "(CH={CHANNEL}, IF={IFNAME})",
+                   "CHANNEL", params.id, "IFNAME", params.ifname, "VLAN", vlan);
     }
 }
 
@@ -1004,7 +1069,7 @@ static std::unordered_map<uint8_t, SetStatus> setStatus;
 static std::unordered_map<uint8_t, uint16_t> lastDisabledVlan;
 
 /** @brief Gets the set status for the channel if it exists
- *         Otherise populates and returns the default value.
+ *         Otherwise populates and returns the default value.
  *
  *  @param[in] channel - The channel id corresponding to an ethernet interface
  *  @return A reference to the SetStatus for the channel
@@ -1310,18 +1375,18 @@ RspType<> setAMILanOem(uint8_t channel, uint8_t parameter,
         case LanAMIOEMParam::NCSIChannelList:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamNotSupported();
         }
     }
-    return response(ccParamNotSupported);
+    return responseParamNotSupported();
 }
 
 RspType<message::Payload> getAMILanOem(uint8_t channel, uint8_t parameter,
                                        uint8_t set, uint8_t block)
 {
     message::Payload ret;
-    constexpr uint8_t current_revision = 0x11;
-    ret.pack(current_revision);
+    constexpr uint8_t currentRevision = 0x11;
+    ret.pack(currentRevision);
 
     switch (static_cast<LanAMIOEMParam>(parameter))
     {
@@ -1391,26 +1456,26 @@ RspType<message::Payload> getAMILanOem(uint8_t channel, uint8_t parameter,
             auto packagechannellist =
                 channelCall<getChannelListProperty>(channel);
 
-            for (int package_num = 0;
-                 package_num < (int)packagechannellist.size(); package_num++)
+            for (int packageNum = 0;
+                 packageNum < (int)packagechannellist.size(); packageNum++)
             {
-                for (int channel_num = 0;
-                     channel_num <
-                     (int)(std::get<1>(packagechannellist[package_num])).size();
-                     channel_num++)
+                for (int channelNum = 0;
+                     channelNum <
+                     (int)(std::get<1>(packagechannellist[packageNum])).size();
+                     channelNum++)
                 {
                     ret.pack(
-                        (uint8_t)std::get<0>(packagechannellist[package_num]));
+                        (uint8_t)std::get<0>(packagechannellist[packageNum]));
                     std::vector<uint16_t> channellist =
-                        std::get<1>(packagechannellist[package_num]);
-                    ret.pack((uint8_t)channellist[channel_num]);
+                        std::get<1>(packagechannellist[packageNum]);
+                    ret.pack((uint8_t)channellist[channelNum]);
                 }
             }
 
             return responseSuccess(std::move(ret));
         }
     }
-    return response(ccParamNotSupported);
+    return responseParamNotSupported();
 }
 
 /**
@@ -1973,14 +2038,14 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         static_cast<uint8_t>(channelBits), ctx->channel);
     if (reserved1 || !isValidChannel(channel))
     {
-        log<level::ERR>("Set Lan - Invalid field in request");
+        lg2::error("Set Lan - Invalid field in request");
         req.trailingOk = true;
         return responseInvalidFieldRequest();
     }
 
     if (!isLanChannel(channel).value_or(false))
     {
-        log<level::ERR>("Set Lan - Not a LAN channel");
+        lg2::error("Set Lan - Not a LAN channel");
         return responseInvalidFieldRequest();
     }
 
@@ -2035,7 +2100,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     auto& storedStatus = getSetStatus(channel);
                     if (storedStatus == SetStatus::InProgress)
                     {
-                        return response(ccParamSetLocked);
+                        return responseParamSetLocked();
                     }
                     storedStatus = status;
                     return responseSuccess();
@@ -2043,17 +2108,17 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 case SetStatus::Commit:
                 {
                     getSetStatus(channel) = SetStatus::Complete;
-                    return response(ccParamNotSupported);
+                    return responseParamNotSupported();
                 }
                 case SetStatus::Reserved:
                     return responseInvalidFieldRequest();
             }
-            return response(ccParamNotSupported);
+            return responseParamNotSupported();
         }
         case LanParam::AuthSupport:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::AuthEnables:
         {
@@ -2081,7 +2146,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             catch (const std::exception& e)
             {
                 return responseInvalidFieldRequest();
-            }  
+            }
             return responseSuccess();
         }
         case LanParam::IPSrc:
@@ -2105,16 +2170,23 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     // management. Modifying IPv6 state is done using
                     // a completely different Set LAN Configuration
                     // subcommand.
-                    IsDHCP = true;
                     channelCall<setEthProp<bool>>(channel, "DHCP4", true);
-                    channelCall<reconfigureIfAddr4>(channel, std::nullopt,
-                                                    std::nullopt);
+                    try
+                    {
+                        channelCall<reconfigureIfAddr4>(channel, std::nullopt,
+                                                        std::nullopt);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        lg2::debug(
+                            "IPSrc DHCP transition address reconfigure skipped: {ERR}",
+                            "ERR", e.what());
+                    }
                     return responseSuccess();
                 case IPSrc::Unspecified:
                     return responseInvalidFieldRequest();
                 case IPSrc::Static:
                 {
-                    IsDHCP = false;
                     auto tmpIfAddr = channelCall<getIfAddr4>(channel);
                     stdplus::In4Addr tmpAddr{};
                     uint8_t tmpPrefix;
@@ -2123,8 +2195,17 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     {
                         tmpAddr = tmpIfAddr->address;
                         tmpPrefix = tmpIfAddr->prefix;
-                        channelCall<reconfigureIfAddr4>(channel, tmpAddr,
-                                                        tmpPrefix);
+                        try
+                        {
+                            channelCall<reconfigureIfAddr4>(channel, tmpAddr,
+                                                            tmpPrefix);
+                        }
+                        catch (const std::exception& e)
+                        {
+                            lg2::debug(
+                                "IPSrc Static transition address reconfigure skipped: {ERR}",
+                                "ERR", e.what());
+                        }
                     }
                     return responseSuccess();
                 }
@@ -2147,9 +2228,20 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             {
                 return responseCommandNotAvailable();
             }
-            auto pfx = stdplus::maskToPfx(unpackT<stdplus::In4Addr>(req));
+            auto mask = unpackT<stdplus::In4Addr>(req);
             unpackFinal(req);
-            channelCall<reconfigureIfAddr4>(channel, std::nullopt, pfx);
+            try
+            {
+                auto pfx = stdplus::maskToPfx(mask);
+                channelCall<reconfigureIfAddr4>(channel, std::nullopt, pfx);
+            }
+            catch (const std::exception& e)
+            {
+                lg2::error(
+                    "Invalid subnet mask provided, mask: {MASK}, error: {ERR}",
+                    "MASK", stdplus::toStr(mask), "ERR", e.what());
+                return responseInvalidFieldRequest();
+            }
             return responseSuccess();
         }
         case LanParam::IPv4HeaderParam:
@@ -2220,7 +2312,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     return responseSuccess();
                 }
             }
-            return response(ccParamNotSupported);
+            return responseParamNotSupported();
         }
         case LanParam::GARPInterval:
         {
@@ -2259,36 +2351,36 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         case LanParam::Gateway1MAC:
         {
             log<level::ERR>("Set Lan - Not allow to set gateway MAC Address");
-            return response(ipmiCCWriteReadParameter);
+            return responseWriteReadParameter();
         }
         case LanParam::CommunityString:
-        {            
+        {
             std::vector<uint8_t> data;
             req.unpack(data);
- 
-            if (data.size() != Max_Communitystr_Length)
+
+            if (data.size() != maxCommunityStrLength)
             {
                 return responseInvalidFieldRequest();
             }
- 
+
             try
             {
                 sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
- 
+
                 // Get the PEF object path for this channel
                 auto objPath = getPefObjectPath(bus, channel);
                 if (!objPath)
                 {
                     return responseUnspecifiedError();
                 }
- 
+
                 // Convert data to string (strip trailing NUL padding used
                 // by IPMI 18-byte fixed-length field).
                 std::string communityString(data.begin(), data.end());
                 communityString.erase(std::find(communityString.begin(),
                                                 communityString.end(), '\0'),
                                       communityString.end());
- 
+
                 // Verify that the requested community string has been
                 // pre-configured under
                 // /xyz/openbmc_project/snmp/CommunityStrManager/<name>.
@@ -2333,7 +2425,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                         return responseInvalidFieldRequest();
                     }
                 }
- 
+
                 // Persist the community string on the per-interface
                 // phosphor-networkd object. The property is exposed as
                 // SNMPCommunityString on
@@ -2358,20 +2450,19 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                 // ipmitool reports a clean error instead of retrying.
                 const std::string name = e.name() ? e.name() : "";
                 if (name == "org.freedesktop.DBus.Error.InvalidArgs" ||
-                    name ==
-                        "xyz.openbmc_project.Common.Error.InvalidArgument")
+                    name == "xyz.openbmc_project.Common.Error.InvalidArgument")
                 {
                     return responseInvalidFieldRequest();
                 }
                 return responseUnspecifiedError();
             }
- 
+
             return responseSuccess();
         }
         case LanParam::NumofDestination:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::DestinationType:
         {
@@ -2381,7 +2472,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             uint8_t retries;
             req.unpack(setSel, desttype, timeout, retries);
 
-            if (setSel > Max_Lan_DestType)
+            if (setSel > maxLanDestType)
             {
                 return responseInvalidFieldRequest();
             }
@@ -2394,9 +2485,41 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
 
             try
             {
-                channelCall<setDestinationType>(channel, desttype);
-                updateDestTypeField(configFilePath, setSel, desttype, timeout,
-                                    retries);
+                sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
+
+                // Get the PEF object path for this channel
+                auto objPath = getPefObjectPath(bus, channel);
+                if (!objPath)
+                {
+                    return responseUnspecifiedError();
+                }
+
+                // Read current arrays from D-Bus
+                auto typeArray =
+                    getPefProperty<std::vector<uint8_t>>(bus, *objPath, "Type");
+                auto timeoutArray = getPefProperty<std::vector<uint8_t>>(
+                    bus, *objPath, "Timeout");
+                auto retriesArray = getPefProperty<std::vector<uint8_t>>(
+                    bus, *objPath, "Retries");
+
+                // Update the arrays at the setSel index
+                if (setSel < typeArray.size())
+                {
+                    typeArray[setSel] = desttype;
+                    timeoutArray[setSel] = timeout;
+                    retriesArray[setSel] = retries;
+
+                    // Write back arrays
+                    setPefProperty(bus, *objPath, "Type", typeArray);
+                    setPefProperty(bus, *objPath, "Timeout", timeoutArray);
+                    setPefProperty(bus, *objPath, "Retries", retriesArray);
+                }
+                else
+                {
+                    std::cerr << "Error: setSel " << static_cast<int>(setSel)
+                              << " out of range" << std::endl;
+                    return responseInvalidFieldRequest();
+                }
             }
             catch (const std::exception& e)
             {
@@ -2415,7 +2538,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             req.unpack(setSel, addrFormat, addressData);
             try
             {
-                if (setSel > Max_Lan_DestType)
+                if (setSel > maxLanDestType)
                 {
                     return responseInvalidFieldRequest();
                 }
@@ -2426,23 +2549,100 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     return responseInvalidFieldRequest();
                 }
 
+                sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
+
+                // Get the PEF object path for this channel
+                auto objPath = getPefObjectPath(bus, channel);
+                if (!objPath)
+                {
+                    return responseUnspecifiedError();
+                }
+
+                std::cerr << "formatType " << static_cast<int>(formatType)
+                          << " addressData.size() " << addressData.size()
+                          << std::endl;
+
+                // Read current AddressType array (common for both IPv4 and
+                // IPv6)
+                auto addrTypeArray = getPefProperty<std::vector<uint8_t>>(
+                    bus, *objPath, "AddressType");
+
                 if (formatType == 0x0 && addressData.size() == 11)
                 {
-                    channelCall<setDestinationAddressIPv4>(channel,
-                                                           addressData);
+                    // IPv4 format: first byte is address type, next 4 bytes are
+                    // IP, remaining bytes are MAC
+                    std::vector<uint8_t> ipv4Bytes(addressData.begin() + 1,
+                                                   addressData.begin() + 5);
+                    std::string ipStr = std::to_string(ipv4Bytes[0]) + "." +
+                                        std::to_string(ipv4Bytes[1]) + "." +
+                                        std::to_string(ipv4Bytes[2]) + "." +
+                                        std::to_string(ipv4Bytes[3]);
+
+                    // Read current IPv4 array
+                    auto ipv4Array = getPefProperty<std::vector<std::string>>(
+                        bus, *objPath, "IPv4");
+
+                    // Update the arrays at the setSel index
+                    if (setSel < ipv4Array.size() &&
+                        setSel < addrTypeArray.size())
+                    {
+                        ipv4Array[setSel] = ipStr;
+                        addrTypeArray[setSel] =
+                            formatType; // Use formatType (0 for IPv4)
+
+                        // Write back arrays
+                        setPefProperty(bus, *objPath, "IPv4", ipv4Array);
+                        setPefProperty(bus, *objPath, "AddressType",
+                                       addrTypeArray);
+                    }
+                    else
+                    {
+                        std::cerr
+                            << "Error: setSel " << static_cast<int>(setSel)
+                            << " out of range for IPv4/AddressType array"
+                            << std::endl;
+                        return responseInvalidFieldRequest();
+                    }
                 }
                 else if (formatType == 0x1 && addressData.size() == 16)
                 {
-                    channelCall<setDestinationAddressIPv6>(channel,
-                                                           addressData);
+                    // IPv6 format: 16 bytes of IPv6 address
+                    char ipv6Str[INET6_ADDRSTRLEN] = {};
+                    inet_ntop(AF_INET6, addressData.data(), ipv6Str,
+                              sizeof(ipv6Str));
+
+                    // Read current IPv6 array
+                    auto ipv6Array = getPefProperty<std::vector<std::string>>(
+                        bus, *objPath, "IPv6");
+
+                    // Update the arrays at the setSel index
+                    if (setSel < ipv6Array.size() &&
+                        setSel < addrTypeArray.size())
+                    {
+                        ipv6Array[setSel] = std::string(ipv6Str);
+                        addrTypeArray[setSel] =
+                            formatType; // Use formatType (1 for IPv6)
+
+                        // Write back arrays
+                        setPefProperty(bus, *objPath, "IPv6", ipv6Array);
+                        setPefProperty(bus, *objPath, "AddressType",
+                                       addrTypeArray);
+                    }
+                    else
+                    {
+                        std::cerr
+                            << "Error: setSel " << static_cast<int>(setSel)
+                            << " out of range for IPv6/AddressType array"
+                            << std::endl;
+                        return responseInvalidFieldRequest();
+                    }
                 }
                 else
                 {
+                    std::cerr << "formatType invalid data" << std::endl;
                     return responseInvalidFieldRequest();
                 }
 
-                updateDestAddressField(configFilePath, addrFormat, addressData,
-                                       setSel);
                 return responseSuccess();
             }
             catch (const std::exception& e)
@@ -2525,7 +2725,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         case LanParam::IPFamilySupport:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPFamilyEnables:
         {
@@ -2591,7 +2791,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         case LanParam::IPv6Status:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPv6StaticAddresses:
         {
@@ -2668,7 +2868,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         case LanParam::IPv6DynamicAddresses:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPv6RouterControl:
         {
@@ -2933,22 +3133,22 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         case LanParam::IPv6DynamicRouterInfoPrefixValue:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPv6DHCPv6DynamicDUIDStorageLength:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPv6DHCPv6DynamicDUIDs:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPv6DHCPv6TimingConfigurationSupport:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPv6DHCPv6TimingConfiguration:
         {
@@ -3099,7 +3299,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         case LanParam::IPv6SLAACTimingConfigurationSupport:
         {
             req.trailingOk = true;
-            return response(ccParamReadOnly);
+            return responseParamReadOnly();
         }
         case LanParam::IPv6SLAACTimingConfiguration:
         {
@@ -3207,7 +3407,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         {
             log<level::ERR>(
                 "Set Lan - Not allow to set Backup gateway MAC Address");
-            return response(ipmiCCWriteReadParameter);
+            return responseWriteReadParameter();
         }
     }
 
@@ -3220,7 +3420,7 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
     }
 
     req.trailingOk = true;
-    return response(ccParamNotSupported);
+    return responseParamNotSupported();
 }
 
 RspType<> setLan(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
@@ -3240,7 +3440,7 @@ RspType<> setLan(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         {
             return responseInvalidFieldRequest();
         }
-        throw;
+        return responseUnspecifiedError();
     }
 }
 
@@ -3249,8 +3449,8 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
                                  uint8_t parameter, uint8_t set, uint8_t block)
 {
     message::Payload ret;
-    constexpr uint8_t current_revision = 0x11;
-    ret.pack(current_revision);
+    constexpr uint8_t currentRevision = 0x11;
+    ret.pack(currentRevision);
     if constexpr (debug)
     {
         log<level::ERR>("Get Lan - Invalid field in request");
@@ -3309,18 +3509,22 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         }
         case LanParam::AuthSupport:
         {
-            std::bitset<6> support;
-            ret.pack(support, uint2_t{});
+            uint8_t authtype = static_cast<uint8_t>(EAuthType::none) |
+                               static_cast<uint8_t>(EAuthType::md2) |
+                               static_cast<uint8_t>(EAuthType::md5) |
+                               static_cast<uint8_t>(EAuthType::straightPasswd) |
+                               static_cast<uint8_t>(EAuthType::oem);
+
+            ret.pack(std::bitset<6>(authtype), uint2_t{});
             return responseSuccess(std::move(ret));
         }
         case LanParam::AuthEnables:
         {
-            std::bitset<6> enables;
-            ret.pack(enables, uint2_t{}); // Callback
-            ret.pack(enables, uint2_t{}); // User
-            ret.pack(enables, uint2_t{}); // Operator
-            ret.pack(enables, uint2_t{}); // Admin
-            ret.pack(enables, uint2_t{}); // OEM
+            for (size_t i = 0; i < authEnablesCount; ++i)
+            {
+                uint8_t authMask = channelConfig[channel].authEnables[i];
+                ret.pack(std::bitset<6>(authMask), uint2_t{});
+            }
             return responseSuccess(std::move(ret));
         }
         case LanParam::IP:
@@ -3410,7 +3614,8 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         }
         case LanParam::CommunityString:
         {
-            std::vector<uint8_t> comStrData(Max_Communitystr_Length, 0x00);
+            std::vector<uint8_t> comStrData(maxCommunityStrLength, 0x00);
+
             try
             {
                 // Read the community string from the same D-Bus property
@@ -3427,43 +3632,42 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
                     return responseUnspecifiedError();
                 }
 
-                auto communityString = std::get<std::string>(getDbusProperty(
-                    bus, netService, *path, INTF_ETHERNET,
-                    "SNMPCommunityString"));
+                auto communityString = std::get<std::string>(
+                    getDbusProperty(bus, netService, *path, INTF_ETHERNET,
+                                    "SNMPCommunityString"));
 
                 std::copy_n(
                     communityString.begin(),
                     std::min(communityString.size(),
-                             static_cast<size_t>(Max_Communitystr_Length)),
+                             static_cast<size_t>(maxCommunityStrLength)),
                     comStrData.begin());
             }
-            catch (const std::exception& e)
+            catch (const sdbusplus::exception_t& e)
             {
                 std::cerr << "Error retrieving community string: " << e.what()
                           << std::endl;
                 return responseUnspecifiedError();
             }
-            ret.pack(comStrData);
 
+            ret.pack(comStrData);
             return responseSuccess(std::move(ret));
         }
         case LanParam::NumofDestination: // Read only parameter
         {
-            uint8_t setSelector;
-            uint8_t blockSelector;
-            if ((setSelector != 0) || (blockSelector != 0))
-            {
-                return ipmi::responseInvalidFieldRequest();
-            }
-
             try
             {
-                sdbusplus::bus_t bus(ipmid_get_sd_bus_connection());
-                auto params = getChannelParams(bus, channel);
-                uint8_t numdestvalue = getJsonValue(configFilePath);
-                channelCall<setNumofDestinationValue>(channel, numdestvalue);
-                uint8_t lanDestValue = getNumofDestinationValue(bus);
-                ret.pack(lanDestValue);
+                auto bus = sdbusplus::bus::new_default();
+
+                // Get the PEF object path for this channel
+                auto objPath = getPefObjectPath(bus, channel);
+                if (!objPath)
+                {
+                    return responseUnspecifiedError();
+                }
+
+                uint8_t numDest = getPefProperty<uint8_t>(
+                    bus, *objPath, "NumberofDestinations");
+                ret.pack(numDest);
                 return responseSuccess(std::move(ret));
             }
             catch (const std::exception& e)
@@ -3479,28 +3683,49 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             uint8_t getSel = set;
             uint8_t timeout = 0;
             uint8_t retries = 0;
+
+            if (getSel > maxLanDestType)
+            {
+                return responseParmOutOfRange();
+            }
+
             try
             {
-                std::ifstream configFile(configFilePath);
-                Json config;
-                if (configFile.is_open())
+                auto bus = sdbusplus::bus::new_default();
+
+                // Get the PEF object path for this channel
+                auto objPath = getPefObjectPath(bus, channel);
+                if (!objPath)
                 {
-                    configFile >> config;
-                    configFile.close();
+                    return responseUnspecifiedError();
                 }
-                std::stringstream ss;
-                ss << std::uppercase << std::hex << std::setw(2)
-                   << std::setfill('0') << static_cast<int>(getSel);
-                std::string selectorKey = ss.str();
-                const auto& destConfig =
-                    config["Config"]["DestinationType"][selectorKey];
-                destType = destConfig["Type"].get<uint8_t>();
-                timeout = destConfig["Timeout"].get<uint8_t>();
-                retries = destConfig["Retries"].get<uint8_t>();
+
+                // Read arrays from D-Bus using helper function
+                auto typeArray =
+                    getPefProperty<std::vector<uint8_t>>(bus, *objPath, "Type");
+                auto timeoutArray = getPefProperty<std::vector<uint8_t>>(
+                    bus, *objPath, "Timeout");
+                auto retriesArray = getPefProperty<std::vector<uint8_t>>(
+                    bus, *objPath, "Retries");
+
+                // Check if getSel index is valid and get values
+                if (getSel < typeArray.size() && getSel < timeoutArray.size() &&
+                    getSel < retriesArray.size())
+                {
+                    destType = typeArray[getSel];
+                    timeout = timeoutArray[getSel];
+                    retries = retriesArray[getSel];
+                }
+                else
+                {
+                    std::cerr << "Warning: getSel " << static_cast<int>(getSel)
+                              << " out of range, returning zeros" << std::endl;
+                    // Return zeros for out of range selector
+                }
             }
             catch (const std::exception& e)
             {
-                std::cerr << "Error retrieving timeout/retries from JSON: "
+                std::cerr << "Error retrieving DestinationType from D-Bus: "
                           << e.what() << std::endl;
                 return responseUnspecifiedError();
             }
@@ -3513,87 +3738,102 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         case LanParam::DestinationAddress:
         {
             uint8_t setSel = set;
-            if (setSel > Max_Lan_DestType)
+            if (setSel > maxLanDestType)
             {
                 return responseParmOutOfRange();
             }
 
-            std::stringstream ss;
-            ss << std::uppercase << std::hex << std::setw(2)
-               << std::setfill('0') << static_cast<int>(setSel);
-            std::string selectorKey = ss.str();
-
-            std::ifstream configFile(configFilePath);
-            if (!configFile.is_open())
+            try
             {
-                return responseUnspecifiedError();
-            }
+                auto bus = sdbusplus::bus::new_default();
 
-            Json config;
-            configFile >> config;
-            configFile.close();
-
-            auto& destConfig = config["Config"]["DestinationAddress"];
-            if (!destConfig.contains(selectorKey))
-            {
-                return responseParmOutOfRange();
-            }
-
-            auto& entry = destConfig[selectorKey];
-
-            if (entry.contains("IPv4"))
-            {
-                std::string ipStr = entry["IPv4"];
-                std::vector<uint8_t> ipv4Data;
-                std::istringstream stream(ipStr);
-                std::string byteStr;
-                while (std::getline(stream, byteStr, '.'))
+                // Get the PEF object path for this channel
+                auto objPath = getPefObjectPath(bus, channel);
+                if (!objPath)
                 {
-                    ipv4Data.push_back(
-                        static_cast<uint8_t>(std::stoi(byteStr)));
+                    return responseUnspecifiedError();
                 }
 
-                if (ipv4Data.size() == 4)
+                // Read AddressType array to determine format
+                auto addrTypeArray = getPefProperty<std::vector<uint8_t>>(
+                    bus, *objPath, "AddressType");
+
+                // Get formatType from AddressType array (0 = IPv4, 1 = IPv6)
+                uint8_t formatType =
+                    (setSel < addrTypeArray.size()) ? addrTypeArray[setSel] : 0;
+
+                // Check formatType and return appropriate address format
+                if (formatType == 0x0)
                 {
-                    std::vector<uint8_t> macData(6, 0x00);
-                    if (entry.contains("MAC") && entry["MAC"].is_array() &&
-                        entry["MAC"].size() == 6)
+                    // IPv4 format
+                    auto ipv4Array = getPefProperty<std::vector<std::string>>(
+                        bus, *objPath, "IPv4");
+
+                    if (setSel < ipv4Array.size() && !ipv4Array[setSel].empty())
                     {
-                        for (size_t i = 0; i < 6; ++i)
+                        std::string ipStr = ipv4Array[setSel];
+                        std::vector<uint8_t> ipv4Data;
+                        std::istringstream stream(ipStr);
+                        std::string byteStr;
+                        while (std::getline(stream, byteStr, '.'))
                         {
-                            macData[i] = entry["MAC"][i];
+                            ipv4Data.push_back(
+                                static_cast<uint8_t>(std::stoi(byteStr)));
+                        }
+
+                        if (ipv4Data.size() == 4)
+                        {
+                            std::vector<uint8_t> macData(6, 0x00);
+                            std::vector<uint8_t> packedData;
+                            packedData.push_back(
+                                formatType); // First byte is formatType (0 for
+                                             // IPv4)
+                            packedData.insert(packedData.end(),
+                                              ipv4Data.begin(), ipv4Data.end());
+                            packedData.insert(packedData.end(), macData.begin(),
+                                              macData.end());
+
+                            uint8_t addrFormat = 0x00; // IPv4 format
+                            ret.pack(setSel);
+                            ret.pack(addrFormat);
+                            ret.pack(packedData);
                         }
                     }
-
-                    std::vector<uint8_t> packedData;
-                    packedData.push_back(0x01);
-                    packedData.insert(packedData.end(), ipv4Data.begin(),
-                                      ipv4Data.end());
-                    packedData.insert(packedData.end(), macData.begin(),
-                                      macData.end());
-
-                    uint8_t addrFormat = 0x00 << 4;
-                    ret.pack(setSel);
-                    ret.pack(addrFormat);
-                    ret.pack(packedData);
-                    return responseSuccess(std::move(ret));
                 }
-            }
-
-            if (entry.contains("IPv6"))
-            {
-                std::string ipStr = entry["IPv6"];
-                std::vector<uint8_t> ipv6(16);
-                if (inet_pton(AF_INET6, ipStr.c_str(), ipv6.data()) == 1)
+                else if (formatType == 0x1)
                 {
-                    uint8_t addrFormat = 0x01 << 4;
-                    ret.pack(setSel);
-                    ret.pack(addrFormat);
-                    ret.pack(ipv6);
-                    return responseSuccess(std::move(ret));
+                    // IPv6 format
+                    auto ipv6Array = getPefProperty<std::vector<std::string>>(
+                        bus, *objPath, "IPv6");
+
+                    // Check if setSel index exists in IPv6 array and is not
+                    // empty
+                    if (setSel < ipv6Array.size() && !ipv6Array[setSel].empty())
+                    {
+                        std::string ipStr = ipv6Array[setSel];
+                        std::vector<uint8_t> ipv6(16);
+                        if (inet_pton(AF_INET6, ipStr.c_str(), ipv6.data()) ==
+                            1)
+                        {
+                            uint8_t addrFormat = 0x01 << 4; // IPv6 format
+                            ret.pack(setSel);
+                            ret.pack(addrFormat);
+                            ret.pack(ipv6);
+                        }
+                    }
                 }
+
+                // No valid address found at this index
+                std::cerr << "Note: No valid address found at selector "
+                          << static_cast<int>(setSel) << std::endl;
+                return responseUnspecifiedError();
             }
-            return responseUnspecifiedError();
+            catch (const std::exception& e)
+            {
+                std::cerr << "Error in GET DestinationAddress: " << e.what()
+                          << std::endl;
+                return responseUnspecifiedError();
+            }
         }
         case LanParam::VLANId:
         {
@@ -4221,7 +4461,7 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
             return getLanOem(channel, parameter, set, block);
     }
 
-    return response(ccParamNotSupported);
+    return responseParamNotSupported();
 }
 
 constexpr const char* solInterface = "xyz.openbmc_project.Ipmi.SOL";
@@ -4233,10 +4473,6 @@ constexpr uint8_t retryMask = 0x07;
 
 constexpr Cc ccSetInProgressActive = 0x81;
 
-static inline auto responseParmNotSupported()
-{
-    return response(ipmiCCParamNotSupported);
-}
 static inline auto responseSetInProgressActive()
 {
     return response(ccSetInProgressActive);
@@ -4255,8 +4491,16 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
         return responseInvalidFieldRequest();
     }
 
+    auto channelName = ipmi::getChannelName(channel);
+    if (channelName.empty())
+    {
+        lg2::error("Channel name does not exist for channel {CHANNEL}",
+                   "CHANNEL", channel);
+        return responseInvalidFieldRequest();
+    }
+
     std::string solService{};
-    std::string solPathWitheEthName = solPath + ipmi::getChannelName(channel);
+    std::string solPathWitheEthName = solPath + channelName;
 
     if (ipmi::getService(ctx, solInterface, solPathWitheEthName, solService))
     {
@@ -4297,7 +4541,7 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
 
             if (progress == 2)
             {
-                return responseParmNotSupported();
+                return responseParamNotSupported();
             }
 
             if (ipmi::setDbusProperty(ctx, solService, solPathWitheEthName,
@@ -4438,7 +4682,7 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
         }
         case SolConfParam::Port:
         {
-            return response(ipmiCCWriteReadParameter);
+            return responseWriteReadParameter();
         }
         case SolConfParam::NonVbitrate:
         {
@@ -4478,11 +4722,11 @@ RspType<> setSolConfParams(Context::ptr ctx, uint4_t channelBits,
             break;
         }
         case SolConfParam::Vbitrate:
-            return response(ipmiCCParamNotSupported);
+            return responseParamNotSupported();
         case SolConfParam::Channel:
-            return response(ipmiCCWriteReadParameter);
+            return responseWriteReadParameter();
         default:
-            return response(ipmiCCParamNotSupported);
+            return responseParamNotSupported();
     }
     return responseSuccess();
 }
@@ -4492,8 +4736,8 @@ RspType<message::Payload> getSolConfParams(
     uint8_t parameter, uint8_t /*set*/, uint8_t /*block*/)
 {
     message::Payload ret;
-    constexpr uint8_t current_revision = 0x11;
-    ret.pack(current_revision);
+    constexpr uint8_t currentRevision = 0x11;
+    ret.pack(currentRevision);
     if (revOnly)
     {
         return responseSuccess(std::move(ret));
@@ -4508,8 +4752,16 @@ RspType<message::Payload> getSolConfParams(
         return responseInvalidFieldRequest();
     }
 
+    auto channelName = ipmi::getChannelName(channel);
+    if (channelName.empty())
+    {
+        lg2::error("Channel name does not exist for channel {CHANNEL}",
+                   "CHANNEL", channel);
+        return responseInvalidFieldRequest();
+    }
+
     std::string solService{};
-    std::string solPathWitheEthName = solPath + ipmi::getChannelName(channel);
+    std::string solPathWitheEthName = solPath + channelName;
 
     if (ipmi::getService(ctx, solInterface, solPathWitheEthName, solService))
     {
@@ -4633,7 +4885,7 @@ RspType<message::Payload> getSolConfParams(
                     "/xyz/openbmc_project/console/default",
                     "xyz.openbmc_project.Console.UART", "Baud", baudRate))
             {
-                return ipmi::responseUnspecifiedError();
+                return responseParamNotSupported();
             }
             switch (baudRate)
             {
@@ -4660,18 +4912,18 @@ RspType<message::Payload> getSolConfParams(
         }
         case SolConfParam::Vbitrate:
         default:
-            return response(ipmiCCParamNotSupported);
+            return responseParamNotSupported();
     }
 
-    return response(ccParamNotSupported);
+    return responseParamNotSupported();
 }
 
 } // namespace transport
 } // namespace ipmi
 
-void register_netfn_transport_functions() __attribute__((constructor));
+void registerNetFnTransportFunctions() __attribute__((constructor));
 
-void register_netfn_transport_functions()
+void registerNetFnTransportFunctions()
 {
     ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnTransport,
                           ipmi::transport::cmdSetLanConfigParameters,
