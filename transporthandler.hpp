@@ -444,6 +444,7 @@ std::optional<IfNeigh<family>> findStaticNeighbor(
             ret.ip = ip;
             ret.mac = stdplus::fromStr<stdplus::EtherAddr>(
                 std::get<std::string>(neighbor.at("MACAddress")));
+            ret.prefixLength = std::get<uint8_t>(neighbor.at("PrefixLength"));
 
             return ret;
         }
