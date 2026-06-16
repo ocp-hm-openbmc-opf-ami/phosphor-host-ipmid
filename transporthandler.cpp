@@ -2,7 +2,6 @@
 
 #include <arpa/inet.h>
 
-#include <boost/asio/steady_timer.hpp>
 #include <ipmid/utils.hpp>
 #include <nlohmann/json.hpp>
 #include <phosphor-logging/lg2.hpp>
@@ -13,7 +12,6 @@
 #include <stdplus/raw.hpp>
 
 #include <array>
-#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -294,13 +292,6 @@ const std::unordered_set<IP::AddressOrigin> originsV4Dynamic = {
 
 static constexpr uint8_t oemCmdStart = 192;
 static constexpr uint8_t InteloemCmdStart = 199;
-static constexpr auto ipFamilyApplyDelay = std::chrono::milliseconds(500);
-bool IsDHCP = false;
-
-// IPMI completion codes for LAN/SOL configuration parameter commands
-static constexpr ipmi::Cc ccParamNotSupported = 0x80;
-static constexpr ipmi::Cc ccParamSetLocked = 0x81;
-static constexpr ipmi::Cc ccParamReadOnly = 0x82;
 
 static std::unordered_map<uint8_t, uint16_t> lastEnabledVlan;
 
@@ -1065,22 +1056,6 @@ bool getIPAddressingState(sdbusplus::bus::bus& bus, ChannelParams& params)
     return std::get<bool>(
         getDbusProperty(bus, params.service, params.logicalPath, INTF_ETHERNET,
                         AddrFamily<family>::propertyIPEnabled));
-}
-
-template <auto StateGetter, auto StateEnabler>
-bool setIpFamilyStateSafe(uint8_t channel, bool enable, const char* logMsg)
-{
-    try
-    {
-        if (channelCall<StateGetter>(channel) != enable)
-            channelCall<StateEnabler>(channel, enable);
-    }
-    catch (const std::exception& e)
-    {
-        lg2::debug(logMsg, "ERR", e.what());
-        return false;
-    }
-    return true;
 }
 
 // We need to store this value so it can be returned to the client
@@ -2074,21 +2049,23 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
         return responseInvalidFieldRequest();
     }
 
-    auto lanParam = static_cast<LanParam>(parameter);
-    if ((lanParam >= LanParam::IP && lanParam <= LanParam::SubnetMask) ||
-        lanParam == LanParam::Gateway1 || lanParam == LanParam::Gateway1MAC)
+    if (!channelCall<getIPAddressingState<AF_INET>>(channel))
     {
-	if (!channelCall<getIPAddressingState<AF_INET>>(channel))
+        if ((static_cast<LanParam>(parameter) >= LanParam::IP &&
+             static_cast<LanParam>(parameter) <= LanParam::SubnetMask) ||
+            (static_cast<LanParam>(parameter) == LanParam::Gateway1) ||
+            (static_cast<LanParam>(parameter) == LanParam::Gateway1MAC))
         {
             req.trailingOk = true;
             return responseCommandNotAvailable();
         }
     }
 
-    if (lanParam >= LanParam::IPv6Status &&
-        lanParam <= LanParam::IPv6StaticRouter1PrefixValue)
+    if (!channelCall<getIPAddressingState<AF_INET6>>(channel))
     {
-	if (!channelCall<getIPAddressingState<AF_INET6>>(channel))
+        if (static_cast<LanParam>(parameter) >= LanParam::IPv6Status &&
+            static_cast<LanParam>(parameter) <=
+                LanParam::IPv6StaticRouter1PrefixValue)
         {
             req.trailingOk = true;
             return responseCommandNotAvailable();
@@ -2694,76 +2671,16 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
             switch (static_cast<IPFamilyEnables>(enables))
             {
                 case IPFamilyEnables::DualStack:
-		    post_work([channel]() {
-                        auto timer = std::make_shared<boost::asio::steady_timer>(
-                            *getIoContext(), ipFamilyApplyDelay);
-                        timer->async_wait([channel, timer](
-                                              const boost::system::error_code& ec) {
-                            if (ec)
-                            {
-                                return;
-                            }
-                            if (!setIpFamilyStateSafe<getIPAddressingState<AF_INET>,
-                                                       enableIPAddressing<AF_INET>>(
-                                    channel, true,
-                                    "IPFamilyEnables DualStack IPv4 enable failed: {ERR}"))
-                            {
-                                return;
-                            }
-                            (void)setIpFamilyStateSafe<getIPAddressingState<AF_INET6>,
-                                                       enableIPAddressing<AF_INET6>>(
-                                channel, true,
-                                "IPFamilyEnables DualStack IPv6 enable skipped: {ERR}");
-                        });
-                    });
+                    channelCall<enableIPAddressing<AF_INET>>(channel, true);
+                    channelCall<enableIPAddressing<AF_INET6>>(channel, true);
                     return responseSuccess();
                 case IPFamilyEnables::IPv4Only:
-                    post_work([channel]() {
-                        auto timer = std::make_shared<boost::asio::steady_timer>(
-                            *getIoContext(), ipFamilyApplyDelay);
-                        timer->async_wait([channel, timer](
-                                              const boost::system::error_code& ec) {
-                            if (ec)
-                            {
-                                return;
-                            }
-                            if (!setIpFamilyStateSafe<getIPAddressingState<AF_INET>,
-                                                       enableIPAddressing<AF_INET>>(
-                                    channel, true,
-                                    "IPFamilyEnables IPv4Only IPv4 enable failed: {ERR}"))
-                            {
-                                return;
-                            }
-                            (void)setIpFamilyStateSafe<getIPAddressingState<AF_INET6>,
-                                                       enableIPAddressing<AF_INET6>>(
-                                channel, false,
-                                "IPFamilyEnables IPv4Only IPv6 disable skipped: {ERR}");
-                        });
-                    }); 
+                    channelCall<enableIPAddressing<AF_INET>>(channel, true);
+                    channelCall<enableIPAddressing<AF_INET6>>(channel, false);
                     return responseSuccess();
                 case IPFamilyEnables::IPv6Only:
-                     post_work([channel]() {
-                        auto timer = std::make_shared<boost::asio::steady_timer>(
-                            *getIoContext(), ipFamilyApplyDelay);
-                        timer->async_wait([channel, timer](
-                                              const boost::system::error_code& ec) {
-                            if (ec)
-                            {
-                                return;
-                            }
-                            if (!setIpFamilyStateSafe<getIPAddressingState<AF_INET6>,
-                                                       enableIPAddressing<AF_INET6>>(
-                                    channel, true,
-                                    "IPFamilyEnables IPv6Only IPv6 enable failed: {ERR}"))
-                            {
-                                return;
-                            }
-                            (void)setIpFamilyStateSafe<getIPAddressingState<AF_INET>,
-                                                       enableIPAddressing<AF_INET>>(
-                                channel, false,
-                                "IPFamilyEnables IPv6Only IPv4 disable skipped: {ERR}");
-                        });
-                    }); 
+                    channelCall<enableIPAddressing<AF_INET>>(channel, false);
+                    channelCall<enableIPAddressing<AF_INET6>>(channel, true);
                     return responseSuccess();
             }
             return responseInvalidFieldRequest();
