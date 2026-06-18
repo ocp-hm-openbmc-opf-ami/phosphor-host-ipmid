@@ -288,10 +288,6 @@ const std::unordered_set<IP::AddressOrigin> originsV4 = {
     IP::AddressOrigin::DHCP,
 };
 
-const std::unordered_set<IP::AddressOrigin> originsV4Dynamic = {
-    IP::AddressOrigin::DHCP,
-};
-
 static constexpr uint8_t oemCmdStart = 192;
 static constexpr uint8_t InteloemCmdStart = 199;
 static constexpr auto ipFamilyApplyDelay = std::chrono::milliseconds(500);
@@ -546,7 +542,8 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
                         std::optional<uint8_t> prefix)
 {
     auto ifaddr = getIfAddr4(bus, params);
-    if (!ifaddr && !address)
+    if (ifaddr && stdplus::toStr(ifaddr->address).empty() &&
+         stdplus::toStr(*address).empty())
     {
         try
         {
@@ -592,10 +589,8 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
     }
     else if (address)
     {
-        auto dynCount = getIfAddrNum<AF_INET>(bus, params, originsV4Dynamic);
-        auto createIdx = static_cast<uint8_t>(dynCount > 0 ? dynCount : 0);
-        createIfAddr<AF_INET>(bus, params, address.value_or(ifaddr->address),
-                              prefix.value_or(fallbackPrefix), createIdx);
+        createIfAddr<AF_INET>(bus, params, address.value(),
+                              prefix.value_or(fallbackPrefix), 0);
     }
 }
 
