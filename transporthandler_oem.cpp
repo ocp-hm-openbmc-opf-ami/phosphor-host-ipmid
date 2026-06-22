@@ -15,12 +15,13 @@
 
 #include "dcmihandler.hpp"
 
-#include <cstdint>
 #include <ipmid/api-types.hpp>
 #include <ipmid/api.hpp>
 #include <ipmid/message.hpp>
 #include <ipmid/message/types.hpp>
 #include <ipmid/utils.hpp>
+
+#include <cstdint>
 #include <vector>
 
 enum class oemLanParam : uint8_t
@@ -48,7 +49,8 @@ RspType<> setLanOem(uint8_t channel __attribute__((unused)), uint8_t parameter,
     std::vector<uint8_t> dataBytes;
     switch (static_cast<oemLanParam>(parameter))
     {
-        case oemLanParam::intelHostnameConfig: {
+        case oemLanParam::intelHostnameConfig:
+        {
             static std::array<uint8_t, lanOemHostnameLength> blockData;
             uint8_t block = 0;
             uint8_t complete = 0;
@@ -114,7 +116,8 @@ RspType<message::Payload> getLanOem(uint8_t channel __attribute__((unused)),
     oemLanParam param = static_cast<oemLanParam>(parameter);
     switch (param)
     {
-        case oemLanParam::intelHostnameConfig: {
+        case oemLanParam::intelHostnameConfig:
+        {
             if (set != 0)
             {
                 return responseInvalidFieldRequest();
