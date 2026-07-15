@@ -843,11 +843,15 @@ ipmi::RspType<> ipmiSetChassisCap(
             ControlChassisCapabilities::property_names::sm_device_address,
             smDeviceAddr);
 
-        ipmi::setDbusProperty(
-            bus, chassisCapObject.second, chassisCapObject.first,
-            ControlChassisCapabilities::interface,
-            ControlChassisCapabilities::property_names::bridge_device_address,
-            bridgeDeviceAddr.value_or(0x20));
+        if (bridgeDeviceAddr.has_value())
+        {
+            ipmi::setDbusProperty(
+                bus, chassisCapObject.second, chassisCapObject.first,
+                ControlChassisCapabilities::interface,
+                ControlChassisCapabilities::property_names::
+                    bridge_device_address,
+                bridgeDeviceAddr.value());
+        }
     }
     catch (const std::exception& e)
     {
