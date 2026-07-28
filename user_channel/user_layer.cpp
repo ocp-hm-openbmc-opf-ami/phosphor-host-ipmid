@@ -193,12 +193,6 @@ Cc ipmiUserSetPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
         userId, chNum, userPrivAccess, otherPrivUpdates);
 }
 
-bool ipmiUserPamAuthenticate(std::string_view userName,
-                             std::string_view userPassword)
-{
-    return pamUserCheckAuthenticate(userName, userPassword);
-}
-
 Cc ipmiUserSetUserPayloadAccess(const uint8_t chNum, const uint8_t operation,
                                 const uint8_t userId,
                                 const PayloadAccess& payloadAccess)
