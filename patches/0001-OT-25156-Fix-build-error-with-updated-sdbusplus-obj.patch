@@ -1,0 +1,55 @@
+From 3f19e5060f7389e5fae9df9e5e3ad4d132375775 Mon Sep 17 00:00:00 2001
+From: Prasanna S <prasannas@ami.com>
+Date: Tue, 12 May 2026 18:17:18 +0530
+Subject: [PATCH] OT-25156 Fix build error with updated sdbusplus object_path
+
+Update the object_path references from:
+sdbusplus::object_path
+to:
+sdbusplus::message::object_path
+
+This fixes the build failure caused by namespace mismatch while
+building with the current sdbusplus revision.
+
+Upstream-Status: Pending [OneTree]
+
+Signed-off-by: Prasanna S <prasannas@ami.com>
+---
+ dbus-sdr/storagecommands.cpp | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/dbus-sdr/storagecommands.cpp b/dbus-sdr/storagecommands.cpp
+index 0cbf0b9..93f74e6 100644
+--- a/dbus-sdr/storagecommands.cpp
++++ b/dbus-sdr/storagecommands.cpp
+@@ -80,8 +80,8 @@ using ObjectType =
+     boost::container::flat_map<std::string,
+                                boost::container::flat_map<std::string, Value>>;
+ using ManagedObjectType =
+-    boost::container::flat_map<sdbusplus::object_path, ObjectType>;
+-using ManagedEntry = std::pair<sdbusplus::object_path, ObjectType>;
++    boost::container::flat_map<sdbusplus::message::object_path, ObjectType>;
++using ManagedEntry = std::pair<sdbusplus::message::object_path, ObjectType>;
+ using Paths = std::vector<std::string>;
+ 
+ constexpr static const char* fruDeviceServiceName =
+@@ -297,7 +297,7 @@ void startMatch(void)
+         "type='signal',arg0path='/xyz/openbmc_project/"
+         "FruDevice/',member='InterfacesAdded'",
+         [](sdbusplus::message_t& message) {
+-            sdbusplus::object_path path;
++            sdbusplus::message::object_path path;
+             ObjectType object;
+             try
+             {
+@@ -323,7 +323,7 @@ void startMatch(void)
+         "type='signal',arg0path='/xyz/openbmc_project/"
+         "FruDevice/',member='InterfacesRemoved'",
+         [](sdbusplus::message_t& message) {
+-            sdbusplus::object_path path;
++            sdbusplus::message::object_path path;
+             std::set<std::string> interfaces;
+             try
+             {
+-- 
+2.43.0
