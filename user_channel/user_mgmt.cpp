@@ -214,12 +214,6 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
                             userData->user[usrIndex]
                                 .userPrivAccess[chIndex]
                                 .ipmiEnabled = userChannelAccess[i];
-                            userData->user[usrIndex]
-                                .userPrivAccess[chIndex]
-                                .linkAuthEnabled = userChannelAccess[i];
-                            userData->user[usrIndex]
-                                .userPrivAccess[chIndex]
-                                .accessCallback = !(userChannelAccess[i]);
                         }
                     }
                 }
