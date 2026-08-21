@@ -18,6 +18,7 @@
 #include <sdbusplus/server.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <xyz/openbmc_project/Logging/SEL/error.hpp>
+#include <xyz/openbmc_project/Time/Synchronization/common.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -611,10 +612,14 @@ ipmi::RspType<> ipmiStorageSetSelTime(uint32_t selDeviceTime)
     try
     {
         sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
-        bool ntp = std::get<bool>(
-            ipmi::getDbusProperty(bus, SystemdTimeService, SystemdTimePath,
-                                  SystemdTimeInterface, "NTP"));
-        if (ntp)
+
+        using Sync =
+            sdbusplus::common::xyz::openbmc_project::time::Synchronization;
+        auto timeSyncMethod = std::get<std::string>(ipmi::getDbusProperty(
+            bus, "xyz.openbmc_project.Settings",
+            "/xyz/openbmc_project/time/sync_method",
+            "xyz.openbmc_project.Time.Synchronization", "TimeSyncMethod"));
+        if (timeSyncMethod != convertForMessage(Sync::Method::Manual))
         {
             return ipmi::responseCommandNotAvailable();
         }

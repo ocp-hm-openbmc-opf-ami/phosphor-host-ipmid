@@ -244,17 +244,6 @@ Cc ipmiUserSetPrivilegeAccess(const uint8_t userId, const uint8_t chNum,
                               const PrivAccess& privAccess,
                               const bool& otherPrivUpdate);
 
-/** @brief check for user pam authentication. This is to determine, whether user
- * is already locked out for failed login attempt
- *
- *  @param[in] username - username
- *  @param[in] password - password
- *
- *  @return status
- */
-bool ipmiUserPamAuthenticate(std::string_view userName,
-                             std::string_view userPassword);
-
 /** @brief sets user payload access data
  *
  *  @param[in] chNum - channel number
