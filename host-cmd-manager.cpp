@@ -14,6 +14,8 @@
 
 #include <chrono>
 
+static constexpr bool debug = false;
+
 using HostState = sdbusplus::common::xyz::openbmc_project::state::Host;
 
 namespace phosphor
@@ -127,7 +129,10 @@ void Manager::checkQueueAndAlertHost()
 {
     if (this->workQueue.size() >= 1)
     {
-        lg2::debug("Asserting SMS Attention");
+        if (debug)
+        {
+            lg2::debug("Asserting SMS Attention");
+        }
 
 #ifdef IF_INTEL_PLATFORMS
         auto host = ::ipmi::getService(this->bus, IPMI_INTERFACE, IPMI_PATH);
@@ -149,7 +154,10 @@ void Manager::checkQueueAndAlertHost()
         {
             auto reply = this->bus.call(method);
 
-            lg2::debug("SMS Attention asserted");
+            if (debug)
+            {
+                lg2::debug("SMS Attention asserted");
+            }
         }
         catch (const std::exception&)
         {
@@ -162,8 +170,11 @@ void Manager::checkQueueAndAlertHost()
 // Called by specific implementations that provide commands
 void Manager::execute(CommandHandler command)
 {
-    lg2::debug("Pushing cmd on to queue, command: {COMMAND}", "COMMAND",
-               std::get<0>(command).first);
+    if (debug)
+    {
+        lg2::debug("Pushing cmd on to queue, command: {COMMAND}", "COMMAND",
+                   std::get<0>(command).first);
+    }
 
     this->workQueue.emplace(command);
 

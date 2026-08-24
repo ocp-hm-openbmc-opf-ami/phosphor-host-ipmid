@@ -736,51 +736,6 @@ int pamUpdatePasswd(const char* username, const char* password)
     return pam_end(localAuthHandle, PAM_SUCCESS);
 }
 
-bool pamUserCheckAuthenticate(std::string_view username,
-                              std::string_view password)
-{
-    const struct pam_conv localConversation = {
-        pamFunctionConversation, const_cast<char*>(password.data())};
-
-    pam_handle_t* localAuthHandle = nullptr; // this gets set by pam_start
-
-    if (pam_start("dropbear", username.data(), &localConversation,
-                  &localAuthHandle) != PAM_SUCCESS)
-    {
-        lg2::error("User Authentication Failure");
-        return false;
-    }
-
-    int retval = pam_authenticate(localAuthHandle,
-                                  PAM_SILENT | PAM_DISALLOW_NULL_AUTHTOK);
-
-    if (retval != PAM_SUCCESS)
-    {
-        lg2::debug("pam_authenticate returned failure: {ERROR}", "ERROR",
-                   retval);
-
-        pam_end(localAuthHandle, retval);
-        return false;
-    }
-
-    retval = pam_acct_mgmt(localAuthHandle, PAM_DISALLOW_NULL_AUTHTOK);
-
-    if (retval != PAM_SUCCESS)
-    {
-        if (!((username == DEFAULT_USER) && (retval == PAM_NEW_AUTHTOK_REQD)))
-        {
-            pam_end(localAuthHandle, PAM_SUCCESS);
-            return false;
-        }
-    }
-
-    if (pam_end(localAuthHandle, PAM_SUCCESS) != PAM_SUCCESS)
-    {
-        return false;
-    }
-    return true;
-}
-
 Cc UserAccess::setSpecialUserPassword(const std::string& userName,
                                       const SecureString& userPassword)
 {
