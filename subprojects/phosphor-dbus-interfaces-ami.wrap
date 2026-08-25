@@ -1,0 +1,9 @@
+[wrap-git]
+url = https://git.ami.com/core/ami-bmc/one-tree/core/phosphor-dbus-interfaces.git
+revision = HEAD
+diff_files = phosphor-dbus-interfaces-ami/0001-OT-25156-software.version-add-namespace-path.patch
+patch_directory = phosphor-dbus-interfaces-ami
+
+[provide]
+
+phosphor-dbus-interfaces-ami = phosphor_dbus_interfaces_dep

@@ -11,6 +11,15 @@ project(
     ],
 )
 
+if get_option('tests').enabled()
+    # Apply local patches at configure time; --forward is a no-op if already applied
+    run_command(
+        'patch', '-p1', '--forward',
+        '-i', meson.source_root() / 'patches/0001-OT-25156-Fix-build-error-with-updated-sdbusplus-obj.patch',
+        check: false,
+    )
+endif
+
 # Setting up config data
 conf_data = configuration_data()
 
@@ -120,10 +129,10 @@ endif
 add_project_arguments(
   cpp.get_supported_arguments(
       [
-    	'-Wno-psabi',
-    	'-Wno-missing-field-initializers',
-    	'-Wno-pedantic',
-    	'-Wno-non-virtual-dtor'
+	'-Wno-psabi',
+	'-Wno-missing-field-initializers',
+	'-Wno-pedantic',
+	'-Wno-non-virtual-dtor'
       ],
   ),
   language: 'cpp',
@@ -162,16 +171,29 @@ if not boost.found()
         boost_process,
     ]
 endif
+if (get_option('tests').enabled())
+        sdbusplus_dep = subproject('sdbusplus').get_variable('sdbusplus_dep')
+	meson.override_dependency('sdbusplus', sdbusplus_dep)
+	phosphor_dbus_interfaces_dep = dependency('phosphor-dbus-interfaces-ami')
+	phosphor_logging_dep = subproject('phosphor-logging').get_variable('phosphor_logging_dep')
+else
+        sdbusplus_dep = dependency('sdbusplus')
+	phosphor_dbus_interfaces_dep = dependency('phosphor-dbus-interfaces')
+	phosphor_logging_dep = dependency('phosphor-logging')
 
-phosphor_logging_dep = dependency('phosphor-logging')
-phosphor_dbus_interfaces_dep = dependency('phosphor-dbus-interfaces')
+endif
 sdeventplus_dep = dependency('sdeventplus')
 libsystemd_dep = dependency('libsystemd')
 crypto = dependency('libcrypto', version: '>=1.0.2g')
 pam = cpp.find_library('pam', required: true)
-sdbusplus_dep = dependency('sdbusplus')
 stdplus_dep = dependency('stdplus')
-pdkhook_deps = [ declare_dependency (link_args: '-lpdkhook'),]
+
+if (get_option('tests').enabled())
+	pdkhook_deps = subproject('libpdkhook').get_variable('libpdkhook_dep')
+else
+	pdkhook_deps = [ declare_dependency (link_args: '-lpdkhook'),]
+endif
+
 nlohmann_json_dep = dependency('nlohmann_json', include_type: 'system')
 
 generated_src = []
@@ -191,7 +213,11 @@ endif
 if get_option('ipmi-whitelist').allowed()
     generate_whitelist_script = files('generate_whitelist_create.sh')
 
-    whitelist_conf = get_option('whitelist-conf')
+	if get_option('tests').enabled()
+		whitelist_conf = 'host-ipmid-whitelist-tests.conf'
+	else
+		whitelist_conf = get_option('whitelist-conf')
+	endif
     ipmiwhitelist = run_command( \
             'bash', \
             generate_whitelist_script, \

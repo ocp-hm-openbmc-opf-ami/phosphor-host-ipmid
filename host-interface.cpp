@@ -15,6 +15,8 @@
 #include <memory>
 #include <optional>
 
+static constexpr bool debug = false;
+
 namespace phosphor
 {
 namespace host
@@ -48,8 +50,12 @@ static const std::map<Host::Command, IpmiCmdData> ipmiCommand = {
 // Called at user request
 void Host::execute(Base::Host::Command command)
 {
-    lg2::debug("Pushing cmd on to queue, control host cmd: {CONTROL_HOST_CMD}",
-               "CONTROL_HOST_CMD", convertForMessage(command));
+    if (debug)
+    {
+        lg2::debug(
+            "Pushing cmd on to queue, control host cmd: {CONTROL_HOST_CMD}",
+            "CONTROL_HOST_CMD", convertForMessage(command));
+    }
 
     auto cmd = std::make_tuple(
         ipmiCommand.at(command),
@@ -80,9 +86,12 @@ Host::FirmwareCondition Host::currentFirmwareCondition() const
         auto value = status ? Host::FirmwareCondition::Running
                             : Host::FirmwareCondition::Off;
 
-        lg2::debug("currentFirmwareCondition:hostAckCallback fired, "
-                   "control host cmd: {CONTROL_HOST_CMD}",
-                   "CONTROL_HOST_CMD", value);
+        if (debug)
+        {
+            lg2::debug("currentFirmwareCondition:hostAckCallback fired, "
+                       "control host cmd: {CONTROL_HOST_CMD}",
+                       "CONTROL_HOST_CMD", value);
+        }
 
         *(hostCondition.get()) = value;
         return;
@@ -96,7 +105,10 @@ Host::FirmwareCondition Host::currentFirmwareCondition() const
 
     // Timer to ensure this function returns something within a reasonable time
     sdbusplus::Timer hostAckTimer([hostCondition]() {
-        lg2::debug("currentFirmwareCondition: timer expired!");
+        if (debug)
+        {
+            lg2::debug("currentFirmwareCondition: timer expired!");
+        }
         *(hostCondition.get()) = Host::FirmwareCondition::Off;
     });
 
@@ -108,7 +120,10 @@ Host::FirmwareCondition Host::currentFirmwareCondition() const
 
     while (!hostCondition.get()->has_value())
     {
-        lg2::debug("currentFirmwareCondition: waiting for host response");
+        if (debug)
+        {
+            lg2::debug("currentFirmwareCondition: waiting for host response");
+        }
         io->run_for(std::chrono::milliseconds(100));
     }
     hostAckTimer.stop();

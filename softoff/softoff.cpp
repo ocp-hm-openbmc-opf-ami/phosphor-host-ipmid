@@ -22,6 +22,9 @@
 #include <xyz/openbmc_project/Control/Host/server.hpp>
 
 #include <chrono>
+
+static constexpr bool debug = false;
+
 namespace phosphor
 {
 namespace ipmi
@@ -61,9 +64,12 @@ void SoftPowerOff::hostControlEvent(sdbusplus::message_t& msg)
 
     msg.read(cmdCompleted, cmdStatus);
 
-    lg2::debug(
-        "Host control signal values, command: {COMMAND}, status:{STATUS}",
-        "COMMAND", cmdCompleted, "STATUS", cmdStatus);
+    if (debug)
+    {
+        lg2::debug(
+            "Host control signal values, command: {COMMAND}, status:{STATUS}",
+            "COMMAND", cmdCompleted, "STATUS", cmdStatus);
+    }
 
     if (Host::convertResultFromString(cmdStatus) == Host::Result::Success)
     {
