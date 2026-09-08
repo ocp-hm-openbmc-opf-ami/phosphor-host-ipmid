@@ -681,17 +681,7 @@ ipmi::RspType<int16_t> ipmiStorageGetSelTimeUtcOffset()
                                   "/org/freedesktop/timedate1",
                                   "org.freedesktop.timedate1", "Timezone"));
 
-        bool offsetManuallySet = false;
-        if (currentTimezone == "Etc/GMT" && timeEquation == 0)
-        {
-            offsetManuallySet = true;
-        }
-        else if (currentTimezone.rfind("Etc/GMT", 0) == 0 && timeEquation != 0)
-        {
-            offsetManuallySet = true;
-        }
-
-        if (SelTimeUnspecifiedState && offsetManuallySet)
+        if (SelTimeUnspecifiedState && currentTimezone != "UTC")
         {
             SelTimeUnspecifiedState = false;
         }
