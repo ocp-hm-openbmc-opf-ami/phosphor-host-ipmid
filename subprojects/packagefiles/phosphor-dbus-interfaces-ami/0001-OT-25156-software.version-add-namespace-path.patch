@@ -1,0 +1,30 @@
+From c7e2ccb2c25d542d86e73a4f11f84ab78e659731 Mon Sep 17 00:00:00 2001
+From: Prasanna S <prasannas@ami.com>
+Date: Mon, 11 May 2026 09:46:03 +0530
+Subject: [PATCH] OT-25156 software.version: add namespace path
+
+The software design specifies that all Version objects should be
+under the `/xyz/openbmc_project/software` namespace path.  Add it
+to the YAML so it can be used in clients.
+
+Upstream-Status: Backport [https://github.com/openbmc/phosphor-dbus-interfaces/commit/6db06f5b8024f6a7cd9b69930c2a02402b501ec9]
+
+Signed-off-by: Prasanna S <prasannas@ami.com>
+---
+ yaml/xyz/openbmc_project/Software/Version.interface.yaml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/yaml/xyz/openbmc_project/Software/Version.interface.yaml b/yaml/xyz/openbmc_project/Software/Version.interface.yaml
+index 8b969d5c..3f825563 100644
+--- a/yaml/xyz/openbmc_project/Software/Version.interface.yaml
++++ b/yaml/xyz/openbmc_project/Software/Version.interface.yaml
+@@ -49,3 +49,6 @@ enumerations:
+           - name: PLDM
+             description: >
+               The version is a version for PLDM.
++
++paths:
++    - namespace: /xyz/openbmc_project/software
+-- 
+2.43.0
+

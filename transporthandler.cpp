@@ -53,7 +53,7 @@ constexpr const char* destAddrIpv6Prop = "DestinationAddrIPv6";
 constexpr const char* configFilePath =
     "/var/lib/pef-alert-manager/pef-lan-param-config.json";
 
-constexpr bool debug = false;
+static constexpr bool debug = false;
 
 constexpr size_t authEnablesCount = 5;
 
@@ -557,7 +557,11 @@ void reconfigureIfAddr4(sdbusplus::bus_t& bus, const ChannelParams& params,
         }
         catch (const std::exception& e)
         {
-            lg2::debug("Could not check DHCP4 state: {ERR}", "ERR", e.what());
+            if (debug)
+            {
+                lg2::debug("Could not check DHCP4 state: {ERR}", "ERR",
+                           e.what());
+            }
         }
         lg2::error("Missing address for IPv4 assignment");
         elog<InternalFailure>();
@@ -2191,9 +2195,12 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                     }
                     catch (const std::exception& e)
                     {
-                        lg2::debug(
-                            "IPSrc DHCP transition address reconfigure skipped: {ERR}",
-                            "ERR", e.what());
+                        if (debug)
+                        {
+                            lg2::debug(
+                                "IPSrc DHCP transition address reconfigure skipped: {ERR}",
+                                "ERR", e.what());
+                        }
                     }
                     return responseSuccess();
                 case IPSrc::Unspecified:
@@ -2215,9 +2222,12 @@ RspType<> setLanInt(Context::ptr ctx, uint4_t channelBits, uint4_t reserved1,
                         }
                         catch (const std::exception& e)
                         {
-                            lg2::debug(
-                                "IPSrc Static transition address reconfigure skipped: {ERR}",
-                                "ERR", e.what());
+                            if (debug)
+                            {
+                                lg2::debug(
+                                    "IPSrc Static transition address reconfigure skipped: {ERR}",
+                                    "ERR", e.what());
+                            }
                         }
                     }
                     return responseSuccess();
