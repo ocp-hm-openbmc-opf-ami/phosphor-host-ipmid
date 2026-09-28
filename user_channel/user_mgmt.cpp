@@ -214,12 +214,6 @@ void userUpdateHelper(UserAccess& usrAccess, const UserUpdateEvent& userEvent,
                             userData->user[usrIndex]
                                 .userPrivAccess[chIndex]
                                 .ipmiEnabled = userChannelAccess[i];
-                            userData->user[usrIndex]
-                                .userPrivAccess[chIndex]
-                                .linkAuthEnabled = userChannelAccess[i];
-                            userData->user[usrIndex]
-                                .userPrivAccess[chIndex]
-                                .accessCallback = !(userChannelAccess[i]);
                         }
                     }
                 }
@@ -1323,9 +1317,26 @@ void UserAccess::readUserData()
             throw std::runtime_error(
                 "Corrupted IPMI user data file - invalid user info");
         }
-        std::string userName = userInfo[jsonUserName].get<std::string>();
-        std::string userMailId =
-            userInfo[jsonUserSMTPMailId].get<std::string>();
+        std::string userName;
+        if (userInfo.contains(jsonUserName) &&
+            userInfo[jsonUserName].is_string())
+        {
+            userName = userInfo[jsonUserName].get<std::string>();
+        }
+        else
+        {
+            lg2::warning("Missing or invalid jsonUserName in user data");
+        }
+        std::string userMailId;
+        if (userInfo.contains(jsonUserSMTPMailId) &&
+            userInfo[jsonUserSMTPMailId].is_string())
+        {
+            userMailId = userInfo[jsonUserSMTPMailId].get<std::string>();
+        }
+        else
+        {
+            lg2::warning("Missing or invalid jsonUserSMTPMailId in user data");
+        }
         // Fixed-width username buffer in struct
         safeUsernameCopyToBuffer(usersTbl.user[usrIndex].userName,
                                  sizeof(usersTbl.user[usrIndex].userName),
@@ -1776,6 +1787,27 @@ int UserAccess::getUserObjProperties(
     return -EIO;
 }
 
+void UserAccess::resetUserTableToDefaults()
+{
+    // File is empty, create it for the first time
+    std::fill(reinterpret_cast<uint8_t*>(&usersTbl),
+              reinterpret_cast<uint8_t*>(&usersTbl) + sizeof(usersTbl), 0);
+    // user index 0 is reserved, starts with 1
+    for (size_t userIndex = 1; userIndex <= ipmiMaxUsers; ++userIndex)
+    {
+        for (size_t chIndex = 0; chIndex < ipmiMaxChannels; ++chIndex)
+        {
+            usersTbl.user[userIndex].userPrivAccess[chIndex].privilege =
+                privNoAccess;
+            usersTbl.user[userIndex]
+                .payloadAccess[chIndex]
+                .stdPayloadEnables1[static_cast<uint8_t>(
+                    ipmi::PayloadType::SOL)] = true;
+        }
+        usersTbl.user[userIndex].snmpAccess = false;
+    }
+}
+
 void UserAccess::cacheUserDataFile()
 {
     std::vector<uint8_t> availableChannels = UserAccess::getAvailableChannels();
@@ -1785,24 +1817,23 @@ void UserAccess::cacheUserDataFile()
     {
         readUserData();
     }
+    catch (const Json::exception& e)
+    {
+        lg2::error("Error parsing IPMI user data file: {ERROR}", "ERROR",
+                   e.what());
+        resetUserTableToDefaults();
+        writeUserData();
+    }
     catch (const std::ios_base::failure& e)
-    { // File is empty, create it for the first time
-        std::fill(reinterpret_cast<uint8_t*>(&usersTbl),
-                  reinterpret_cast<uint8_t*>(&usersTbl) + sizeof(usersTbl), 0);
-        // user index 0 is reserved, starts with 1
-        for (size_t userIndex = 1; userIndex <= ipmiMaxUsers; ++userIndex)
-        {
-            for (size_t chIndex = 0; chIndex < ipmiMaxChannels; ++chIndex)
-            {
-                usersTbl.user[userIndex].userPrivAccess[chIndex].privilege =
-                    privNoAccess;
-                usersTbl.user[userIndex]
-                    .payloadAccess[chIndex]
-                    .stdPayloadEnables1[static_cast<uint8_t>(
-                        ipmi::PayloadType::SOL)] = true;
-            }
-            usersTbl.user[userIndex].snmpAccess = false;
-        }
+    {
+        lg2::error("IPMI user data file I/O error: {ERROR}", "ERROR", e.what());
+        resetUserTableToDefaults();
+        writeUserData();
+    }
+    catch (const std::runtime_error& e)
+    {
+        lg2::error("Corrupted IPMI user data file: {ERROR}", "ERROR", e.what());
+        resetUserTableToDefaults();
         writeUserData();
     }
     // Create lock file if it does not exist

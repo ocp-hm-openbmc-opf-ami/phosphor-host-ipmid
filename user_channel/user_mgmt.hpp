@@ -528,6 +528,12 @@ class UserAccess
      */
     void getSystemPrivAndGroups();
 
+    /** @brief function to reset user table to safe default values
+     *  (privNoAccess, SOL payload enabled, snmpAccess=false)
+     *
+     */
+    void resetUserTableToDefaults();
+
     /** @brief function to init user data from configuration & D-Bus objects
      * and to register for signals
      *
