@@ -1883,6 +1883,13 @@ ipmi::RspType<uint8_t,                // Parameter revision
                                      std::nullopt);
     }
 
+    if ((paramSelector >= IPMI_SYSINFO_SYSTEM_FW_VERSION &&
+         paramSelector <= IPMI_SYSINFO_OS_VERSION) &&
+        setSelector != 0)
+    {
+        return ipmi::responseInvalidFieldRequest();
+    }
+
     if (sysInfoParamStore == nullptr)
     {
         sysInfoParamStore = std::make_unique<SysInfoParamStore>();
@@ -2041,6 +2048,13 @@ ipmi::RspType<> ipmiAppSetSystemInfo(uint8_t paramSelector, uint8_t data1,
 
         transferStatus = data1 & progressMask;
         return ipmi::responseSuccess();
+    }
+
+    if ((paramSelector >= IPMI_SYSINFO_SYSTEM_FW_VERSION &&
+         paramSelector <= IPMI_SYSINFO_OS_VERSION) &&
+        data1 != 0)
+    {
+        return ipmi::responseInvalidFieldRequest();
     }
 
     uint8_t setSelector = data1;
