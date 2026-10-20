@@ -18,12 +18,15 @@
 #include <sdbusplus/server.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <xyz/openbmc_project/Logging/SEL/error.hpp>
+#include <xyz/openbmc_project/Time/Synchronization/common.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <variant>
@@ -32,6 +35,8 @@ void registerNetFnStorageFunctions() __attribute__((constructor));
 
 unsigned int g_sel_time = 0xFFFFFFFF;
 static bool SelTimeUnspecifiedState = false;
+static std::string selTimeZoneAtSet;
+static std::optional<int16_t> selTimeUtcOffset;
 namespace ipmi
 {
 namespace sensor
@@ -52,6 +57,19 @@ constexpr auto TIME_INTERFACE = "xyz.openbmc_project.Time.EpochTime";
 constexpr auto BMC_TIME_PATH = "/xyz/openbmc_project/time/bmc";
 constexpr auto DBUS_PROPERTIES = "org.freedesktop.DBus.Properties";
 constexpr auto PROPERTY_ELAPSED = "Elapsed";
+
+int64_t getLocalUtcOffsetSeconds(uint32_t timestamp)
+{
+    std::time_t time = timestamp;
+    std::tm localTime{};
+
+    if (localtime_r(&time, &localTime) == nullptr)
+    {
+        return 0;
+    }
+    return static_cast<int64_t>(localTime.tm_gmtoff);
+}
+
 } // namespace
 
 using InternalFailure =
@@ -565,39 +583,6 @@ ipmi::RspType<uint32_t> // current time
         duration_cast<seconds>(microseconds(bmc_time_usec)).count());
 }
 
-ipmi::RspType<> resetSelUtcOffsetToUTC(int16_t offset)
-{
-    if (offset != 0)
-    {
-        return ipmi::responseUnspecifiedError();
-    }
-
-    try
-    {
-        sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
-
-        auto method = bus.new_method_call(
-            "org.freedesktop.timedate1", "/org/freedesktop/timedate1",
-            "org.freedesktop.timedate1", "SetTimezone");
-
-        method.append("UTC", false); // UTC
-
-        auto reply = bus.call(method);
-        if (reply.is_method_error())
-        {
-            return ipmi::responseUnspecifiedError();
-        }
-
-        return ipmi::responseSuccess();
-    }
-    catch (const std::exception& e)
-    {
-        std::cerr << "Failed to set UTC offset to zero: " << e.what()
-                  << std::endl;
-        return ipmi::responseUnspecifiedError();
-    }
-}
-
 /** @brief implements the set SEL time command
  *  @param selDeviceTime - epoch time
  *        -local time as the number of seconds from 00:00:00, January 1, 1970
@@ -606,18 +591,32 @@ ipmi::RspType<> resetSelUtcOffsetToUTC(int16_t offset)
 ipmi::RspType<> ipmiStorageSetSelTime(uint32_t selDeviceTime)
 {
     using namespace std::chrono;
-    microseconds usec{seconds(selDeviceTime)};
+    auto localSelTime = static_cast<int64_t>(selDeviceTime) +
+                        getLocalUtcOffsetSeconds(selDeviceTime);
+    if (localSelTime < 0 || localSelTime > std::numeric_limits<uint32_t>::max())
+    {
+        return ipmi::responseParmOutOfRange();
+    }
+    microseconds usec{seconds(localSelTime)};
 
     try
     {
         sdbusplus::bus_t bus{ipmid_get_sd_bus_connection()};
-        bool ntp = std::get<bool>(
-            ipmi::getDbusProperty(bus, SystemdTimeService, SystemdTimePath,
-                                  SystemdTimeInterface, "NTP"));
-        if (ntp)
+
+        using Sync =
+            sdbusplus::common::xyz::openbmc_project::time::Synchronization;
+        auto timeSyncMethod = std::get<std::string>(ipmi::getDbusProperty(
+            bus, "xyz.openbmc_project.Settings",
+            "/xyz/openbmc_project/time/sync_method",
+            "xyz.openbmc_project.Time.Synchronization", "TimeSyncMethod"));
+        if (timeSyncMethod != convertForMessage(Sync::Method::Manual))
         {
             return ipmi::responseCommandNotAvailable();
         }
+
+        auto timezoneAtSet = std::get<std::string>(
+            ipmi::getDbusProperty(bus, SystemdTimeService, SystemdTimePath,
+                                  SystemdTimeInterface, "Timezone"));
 
         auto service = ipmi::getService(bus, TIME_INTERFACE, BMC_TIME_PATH);
         std::variant<uint64_t> value{(uint64_t)usec.count()};
@@ -628,13 +627,8 @@ ipmi::RspType<> ipmiStorageSetSelTime(uint32_t selDeviceTime)
 
         method.append(TIME_INTERFACE, PROPERTY_ELAPSED, value);
         auto reply = bus.call(method);
-        // Resetting the SELTimeUTCOffset to default value
-        auto resp = resetSelUtcOffsetToUTC(0);
-        if (resp != ipmi::responseSuccess())
-        {
-            lg2::error("Failed to reset SEL UTC offset to UTC");
-            return ipmi::responseUnspecifiedError();
-        }
+        selTimeZoneAtSet = std::move(timezoneAtSet);
+        selTimeUtcOffset = 0x07FF;
         SelTimeUnspecifiedState = true;
     }
     catch (const InternalFailure& e)
@@ -657,6 +651,11 @@ ipmi::RspType<> ipmiStorageSetSelTime(uint32_t selDeviceTime)
  */
 ipmi::RspType<int16_t> ipmiStorageGetSelTimeUtcOffset()
 {
+    if (selTimeUtcOffset)
+    {
+        return ipmi::responseSuccess(*selTimeUtcOffset);
+    }
+
     try
     {
         time_t timep;
@@ -676,17 +675,7 @@ ipmi::RspType<int16_t> ipmiStorageGetSelTimeUtcOffset()
                                   "/org/freedesktop/timedate1",
                                   "org.freedesktop.timedate1", "Timezone"));
 
-        bool offsetManuallySet = false;
-        if (currentTimezone == "Etc/GMT" && timeEquation == 0)
-        {
-            offsetManuallySet = true;
-        }
-        else if (currentTimezone.rfind("Etc/GMT", 0) == 0 && timeEquation != 0)
-        {
-            offsetManuallySet = true;
-        }
-
-        if (SelTimeUnspecifiedState && offsetManuallySet)
+        if (SelTimeUnspecifiedState && currentTimezone != selTimeZoneAtSet)
         {
             SelTimeUnspecifiedState = false;
         }
@@ -702,6 +691,22 @@ ipmi::RspType<int16_t> ipmiStorageGetSelTimeUtcOffset()
         lg2::error("exception message: {ERROR}", "ERROR", e);
         return ipmi::responseUnspecifiedError();
     }
+}
+
+ipmi::RspType<> ipmiStorageSetSelTimeUtcOffset(int16_t offset)
+{
+    constexpr int16_t minOffset = -1440;
+    constexpr int16_t maxOffset = 1440;
+    constexpr int16_t unspecifiedOffset = 0x07FF;
+
+    if ((offset < minOffset || offset > maxOffset) &&
+        offset != unspecifiedOffset)
+    {
+        return ipmi::responseParmOutOfRange();
+    }
+
+    selTimeUtcOffset = offset;
+    return ipmi::responseSuccess();
 }
 
 /** @brief implements the reserve SEL command
@@ -1019,6 +1024,12 @@ void registerNetFnStorageFunctions()
     ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnStorage,
                           ipmi::storage::cmdSetSelTime,
                           ipmi::Privilege::Operator, ipmiStorageSetSelTime);
+
+    // <Set SEL Time UTC Offset>
+    ipmi::registerHandler(ipmi::prioOpenBmcBase, ipmi::netFnStorage,
+                          ipmi::storage::cmdSetSelTimeUtcOffset,
+                          ipmi::Privilege::Operator,
+                          ipmiStorageSetSelTimeUtcOffset);
 
     ipmi::fru::registerCallbackHandler();
     return;
