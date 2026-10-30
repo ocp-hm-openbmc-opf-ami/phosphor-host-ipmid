@@ -512,6 +512,15 @@ ipmi::Cc setHostNetworkData(ipmi::message::Payload& data)
                 return ipmi::ccReqDataLenInvalid;
             }
 
+            // Reject any addrSize that is not exactly 4 (IPv4) or 16 (IPv6)
+            if (addrSize != ipmi::network::IPV4_ADDRESS_SIZE_BYTE &&
+                addrSize != ipmi::network::IPV6_ADDRESS_SIZE_BYTE)
+            {
+                lg2::error("Invalid address size {SIZE} in setHostNetworkData",
+                           "SIZE", addrSize);
+                return ipmi::ccReqDataLenInvalid;
+            }
+
             uint8_t prefixOffset = ipAddrOffset + addrSize;
             if (msgLen < prefixOffset + sizeof(decltype(prefix)))
             {
