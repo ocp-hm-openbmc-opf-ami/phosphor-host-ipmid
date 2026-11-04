@@ -55,15 +55,6 @@ constexpr const char* configFilePath =
 
 static constexpr bool debug = false;
 
-constexpr size_t authEnablesCount = 5;
-
-struct ChannelConfigData
-{
-    std::array<uint8_t, authEnablesCount> authEnables;
-};
-
-std::map<uint8_t, ChannelConfigData> channelConfig;
-
 void updateJsonFile(const std::string& configFilePath,
                     const std::string& communityString)
 {
@@ -3537,22 +3528,18 @@ RspType<message::Payload> getLan(Context::ptr ctx, uint4_t channelBits,
         }
         case LanParam::AuthSupport:
         {
-            uint8_t authtype = static_cast<uint8_t>(EAuthType::none) |
-                               static_cast<uint8_t>(EAuthType::md2) |
-                               static_cast<uint8_t>(EAuthType::md5) |
-                               static_cast<uint8_t>(EAuthType::straightPasswd) |
-                               static_cast<uint8_t>(EAuthType::oem);
-
-            ret.pack(std::bitset<6>(authtype), uint2_t{});
+            std::bitset<6> support;
+            ret.pack(support, uint2_t{});
             return responseSuccess(std::move(ret));
         }
         case LanParam::AuthEnables:
         {
-            for (size_t i = 0; i < authEnablesCount; ++i)
-            {
-                uint8_t authMask = channelConfig[channel].authEnables[i];
-                ret.pack(std::bitset<6>(authMask), uint2_t{});
-            }
+            std::bitset<6> enables;
+            ret.pack(enables, uint2_t{}); // Callback
+            ret.pack(enables, uint2_t{}); // User
+            ret.pack(enables, uint2_t{}); // Operator
+            ret.pack(enables, uint2_t{}); // Admin
+            ret.pack(enables, uint2_t{}); // OEM
             return responseSuccess(std::move(ret));
         }
         case LanParam::IP:
